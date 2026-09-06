@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import 'des_service.dart';
+
 /// 蓝牙协议服务
 /// 对应小程序中的 bleProtocol.js + lockBiz.js
 class LockProtocol {
@@ -13,9 +14,11 @@ class LockProtocol {
     }
     return bytes;
   }
+
   static String bytesToHex(Uint8List bytes) {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join().toUpperCase();
   }
+
   static int _sumBytes(Uint8List bytes) {
     var sum = 0;
     for (final b in bytes) {
@@ -23,6 +26,7 @@ class LockProtocol {
     }
     return sum;
   }
+
   static int _xorBytes(Uint8List bytes) {
     if (bytes.isEmpty) return 0;
     var acc = bytes[0];
@@ -31,25 +35,31 @@ class LockProtocol {
     }
     return acc & 0xff;
   }
+
   static int _complementByte(int sum) {
     return (~(sum & 0xff) + 256) & 0xff;
   }
+
   // ========== MAC 和蓝牙名称处理 ==========
   static bool isValidMac(String mac) {
     return RegExp(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$').hasMatch(mac.trim());
   }
+
   static Uint8List macToBytes(String mac) {
     if (!isValidMac(mac)) throw Exception('MAC 格式错误');
     final segments = mac.split(':');
     return Uint8List.fromList(segments.map((s) => int.parse(s, radix: 16)).toList());
   }
+
   static String deriveBluetoothNameFromMac(String mac) {
     final clean = mac.toUpperCase().replaceAll(RegExp(r'[^0-9A-F]'), '');
     return clean.length == 12 ? 'BY${clean.substring(clean.length - 9)}' : '';
   }
+
   static String normalizeBluetoothName(String name) {
     return (name).toUpperCase().replaceAll(RegExp(r'[^0-9A-Z]'), '');
   }
+
   static List<int> extractDeviceIdParts(String name) {
     final clean = name.toUpperCase().replaceAll(RegExp(r'[^0-9A-Z]'), '');
     if (clean.length < 11) {
@@ -62,6 +72,7 @@ class LockProtocol {
       int.parse(clean.substring(9, 11), radix: 16),
     ];
   }
+
   // ========== 密钥验证 ==========
   static bool isValidKey(String key) {
     final sanitized = key.toUpperCase().replaceAll(RegExp(r'[^0-9A-F]'), '');
@@ -70,14 +81,17 @@ class LockProtocol {
         sanitized.length % 2 == 0 &&
         RegExp(r'^[0-9A-F]+$').hasMatch(sanitized);
   }
+
   static String sanitizeKey(String key) {
     return key.toUpperCase().replaceAll(RegExp(r'[^0-9A-F]'), '');
   }
+
   // ========== 握手指令 ==========
   static Uint8List buildHandshakeCommand(Uint8List random, String bluetoothName, String productKey) {
     final ids = extractDeviceIdParts(bluetoothName);
     return buildHandshakeCommandWithHeader(random, ids, productKey);
   }
+
   static Uint8List buildHandshakeCommandWithHeader(Uint8List random, List<int> headerBytes, String productKey) {
     if (headerBytes.length != 4) {
       throw Exception('握手指令头部需提供 4 个字节');
@@ -106,6 +120,14 @@ class LockProtocol {
     frame[frame.length - 2] = _complementByte(checksum);
     return Uint8List.fromList(frame);
   }
+
+  /// 用 MAC 后 4 字节构建握手指令（与小程序版一致）
+  static Uint8List buildHandshakeCommandWithMac(Uint8List random, String mac, String productKey) {
+    final macBytes = macToBytes(mac);
+    final headerBytes = macBytes.sublist(2, 6);
+    return buildHandshakeCommandWithHeader(random, headerBytes, productKey);
+  }
+
   // ========== 通信密钥指令 ==========
   static Uint8List buildCommKeyCommand(Uint8List random, String derivedName, String productKey) {
     final ids = extractDeviceIdParts(derivedName);
@@ -136,6 +158,7 @@ class LockProtocol {
     frame[frame.length - 2] = _complementByte(checksum);
     return Uint8List.fromList(frame);
   }
+
   // ========== 时间同步指令 ==========
   static Uint8List buildTimeSyncCommand(Uint8List timeBytes, String derivedName, String sessionKey) {
     final payload = Uint8List.fromList([...timeBytes, 0]);
@@ -164,6 +187,7 @@ class LockProtocol {
     frame[frame.length - 2] = _complementByte(checksum);
     return Uint8List.fromList(frame);
   }
+
   static String generateTimeHex([DateTime? date]) {
     final now = date ?? DateTime.now();
     final year = now.year - 2000;
@@ -179,12 +203,14 @@ class LockProtocol {
     final weekday = weekdayMap[now.weekday % 7];
     return '$yearHex$month$day$hour$minute$second$weekday'.toUpperCase();
   }
+
   // ========== 解密通信密钥 ==========
   static String decryptCommKey(String bodyHex, String productKey) {
     final decrypted = DesService.decryptBlockHex(productKey, bodyHex);
     if (decrypted.length < 32) return '';
     return decrypted.substring(16, 32).toUpperCase();
   }
+
   // ========== 加密开锁指令（来自 lockBiz.js） ==========
   static Uint8List encryptUnlockCommand(Uint8List seed, String mac, String key) {
     final macBytes = macToBytes(mac);
@@ -224,6 +250,7 @@ class LockProtocol {
     payload[totalLength - 2] = (~checksum) & 0xff;
     return payload;
   }
+
   // ========== 解析开锁结果 ==========
   static Map<String, String> decodeOpenResult(String frameHex, String productKey) {
     final clean = frameHex.replaceAll(RegExp(r'[^0-9A-Fa-f]'), '').toUpperCase();
