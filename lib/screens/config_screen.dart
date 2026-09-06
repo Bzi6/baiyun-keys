@@ -86,84 +86,49 @@ class _ConfigScreenState extends State<ConfigScreen> {
     final macPrefix = _macPrefixController.text.trim();
 
     if (openId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先展开高级设置，填写 openId')),
-      );
-      setState(() {
-        _advancedExpanded = true;
-      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请先展开高级设置，填写 openId')));
+      setState(() => _advancedExpanded = true);
       return;
     }
-
     if (encryptedKey.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先填写加密 key（从抓包获取）')),
-      );
-      setState(() {
-        _advancedExpanded = true;
-      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请先填写加密 key（从抓包获取）')));
+      setState(() => _advancedExpanded = true);
       return;
     }
-
     if (macPrefix.isEmpty || macPrefix.length != 3) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('MAC前缀必须是3位字符（如 3E5）')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('MAC前缀必须是3位字符（如 3E5）')));
       return;
     }
 
-    setState(() {
-      _fetching = true;
-    });
-
+    setState(() => _fetching = true);
     try {
       await _saveAdvancedSettings();
-
-      // 1. 用 openId 获取 access_token
       final accessToken = await ApiService.getAccessToken(openId);
-
-      // 2. 用 access_token + 加密 key 获取门禁列表
       final list = await ApiService.fetchGuardListNewApi(accessToken, encryptedKey);
-
-      if (list.isEmpty) {
-        throw Exception('未获取到门禁信息');
-      }
+      if (list.isEmpty) throw Exception('未获取到门禁信息');
 
       final item = list[0];
       final name = (item['address'] ?? item['name'] ?? '自动获取门禁').toString().trim();
       final productKey = (item['productKey'] ?? '').toString().trim();
       final bluetoothName = (item['bluetoothName'] ?? '').toString().trim();
-
-      if (productKey.isEmpty || bluetoothName.isEmpty) {
-        throw Exception('返回的门锁参数不完整');
-      }
+      if (productKey.isEmpty || bluetoothName.isEmpty) throw Exception('返回的门锁参数不完整');
 
       final mac = ApiService.deriveMacFromBluetoothName(bluetoothName, macPrefix);
-
       setState(() {
         _doorNameController.text = name;
         _macController.text = mac;
         _bluetoothNameController.text = bluetoothName.toUpperCase();
         _productKeyController.text = productKey.toUpperCase();
       });
-
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('成功获取 ${list.length} 个门禁，已填充第一个，MAC: $mac')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('成功获取 ${list.length} 个门禁，已填充第一个，MAC: $mac')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('获取失败: $e')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('获取失败: $e')));
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _fetching = false;
-        });
-      }
+      if (mounted) setState(() => _fetching = false);
     }
   }
 
@@ -174,27 +139,82 @@ class _ConfigScreenState extends State<ConfigScreen> {
         mac: _macController.text.trim().toUpperCase(),
         bluetoothName: _bluetoothNameController.text.trim().toUpperCase(),
         productKey: _productKeyController.text.trim().toUpperCase(),
-        unlockKey: _unlockKeyController.text.trim().isEmpty
-            ? null
-            : _unlockKeyController.text.trim().toUpperCase(),
+        unlockKey: _unlockKeyController.text.trim().isEmpty ? null : _unlockKeyController.text.trim().toUpperCase(),
       );
       Navigator.pop(context, config);
     }
   }
 
-  String _buildBackupText(LockConfig config) {
+  // ========== 备份恢复（按照小程序源码逻辑） ==========
+
+  String _buildCopyPayload(LockConfig config) {
     final name = config.doorName.trim().isEmpty ? '未命名' : config.doorName.trim();
     final mac = config.mac.trim().isEmpty ? '缺失' : config.mac.trim();
     final key = config.productKey.trim().isEmpty ? '缺失' : config.productKey.trim();
     final bluetoothName = config.bluetoothName.trim();
     final lines = ['门禁名称：$name', 'MAC：$mac', 'Key：$key'];
     final derived = LockProtocol.deriveBluetoothNameFromMac(mac);
-    if (bluetoothName.isNotEmpty &&
-        derived.isNotEmpty &&
-        bluetoothName.toUpperCase() != derived.toUpperCase()) {
+    if (bluetoothName.isNotEmpty && derived.isNotEmpty && bluetoothName.toUpperCase() != derived.toUpperCase()) {
       lines.add('蓝牙名称：$bluetoothName');
     }
     return lines.join('\n');
+  }
+
+  String _buildCopyPayloadList(List<LockConfig> configs) {
+    if (configs.isEmpty) return '';
+    if (configs.length == 1) return _buildCopyPayload(configs[0]);
+    return configs.asMap().entries.map((e) => '【门禁 ${e.key + 1}】\n${_buildCopyPayload(e.value)}').join('\n\n');
+  }
+
+  List<Map<String, String>> _parseBackupDoorsFromText(String text) {
+    final raw = text.trim();
+    if (raw.isEmpty) return [];
+    final lines = raw.split(RegExp(r'\r?\n'));
+    final blocks = <Map<String, String>>[];
+    var current = {'doorName': '', 'mac': '', 'key': '', 'bluetoothName': ''};
+
+    void pushCurrentIfNeeded() {
+      if (current['doorName']!.isNotEmpty || current['mac']!.isNotEmpty || current['key']!.isNotEmpty || current['bluetoothName']!.isNotEmpty) {
+        blocks.add(Map.from(current));
+        current = {'doorName': '', 'mac': '', 'key': '', 'bluetoothName': ''};
+      }
+    }
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+      if (RegExp(r'^【门禁\s*\d+】$').hasMatch(line)) {
+        pushCurrentIfNeeded();
+        continue;
+      }
+      final nameMatch = RegExp(r'^门禁名称[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
+      if (nameMatch != null) {
+        current['doorName'] = nameMatch.group(1)!.trim();
+        continue;
+      }
+      final macMatch = RegExp(r'^MAC[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
+      if (macMatch != null) {
+        current['mac'] = macMatch.group(1)!.trim();
+        continue;
+      }
+      final keyMatch = RegExp(r'^Key[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
+      if (keyMatch != null) {
+        current['key'] = keyMatch.group(1)!.trim();
+        continue;
+      }
+      final bluetoothMatch = RegExp(r'^蓝牙名称[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
+      if (bluetoothMatch != null) {
+        current['bluetoothName'] = bluetoothMatch.group(1)!.trim();
+        continue;
+      }
+    }
+    pushCurrentIfNeeded();
+
+    return blocks.where((item) {
+      final mac = item['mac'] ?? '';
+      final key = item['key'] ?? '';
+      return LockProtocol.isValidMac(mac) && LockProtocol.isValidKey(key);
+    }).toList();
   }
 
   Future<void> _copyBackup() async {
@@ -210,15 +230,10 @@ class _ConfigScreenState extends State<ConfigScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('暂无可备份的门禁')));
       return;
     }
-    String backupText;
-    if (locks.length == 1) {
-      backupText = _buildBackupText(locks[0]);
-    } else {
-      backupText = locks.asMap().entries.map((e) => '【门禁 ${e.key + 1}】\n${_buildBackupText(e.value)}').join('\n\n');
-    }
+    final backupText = _buildCopyPayloadList(locks);
     await Clipboard.setData(ClipboardData(text: backupText));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已复制到剪贴板，请妥善保存')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已复制 ${locks.length} 套门禁到剪贴板，请妥善保存')));
     }
   }
 
@@ -234,10 +249,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
               content: TextField(
                 controller: controller,
                 maxLines: 8,
-                decoration: const InputDecoration(
-                  hintText: '请粘贴一键复制的门禁参数文本',
-                  border: OutlineInputBorder(),
-                ),
+                decoration: const InputDecoration(hintText: '请粘贴一键复制的门禁参数文本', border: OutlineInputBorder()),
                 onChanged: (_) => setDialogState(() {}),
               ),
               actions: [
@@ -255,31 +267,11 @@ class _ConfigScreenState extends State<ConfigScreen> {
 
     if (result == null || result.trim().isEmpty) return;
 
-    final lines = result.split(RegExp(r'\r?\n'));
-    final blocks = <Map<String, String>>[];
-    var current = <String, String>{'doorName': '', 'mac': '', 'key': '', 'bluetoothName': ''};
-
-    for (final rawLine in lines) {
-      final line = rawLine.trim();
-      if (line.isEmpty) continue;
-      if (RegExp(r'^【门禁\s*\d+】$').hasMatch(line)) {
-        if (current['mac']!.isNotEmpty && current['key']!.isNotEmpty) blocks.add(Map.from(current));
-        current = {'doorName': '', 'mac': '', 'key': '', 'bluetoothName': ''};
-        continue;
+    final parsedBlocks = _parseBackupDoorsFromText(result);
+    if (parsedBlocks.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未识别到有效门禁参数，请检查格式')));
       }
-      final nameMatch = RegExp(r'^门禁名称[：:]\s*(.+)$').firstMatch(line);
-      if (nameMatch != null) { current['doorName'] = nameMatch.group(1)!.trim(); continue; }
-      final macMatch = RegExp(r'^MAC[：:]\s*(.+)$').firstMatch(line);
-      if (macMatch != null) { current['mac'] = macMatch.group(1)!.trim(); continue; }
-      final keyMatch = RegExp(r'^Key[：:]\s*(.+)$').firstMatch(line);
-      if (keyMatch != null) { current['key'] = keyMatch.group(1)!.trim(); continue; }
-      final bluetoothMatch = RegExp(r'^蓝牙名称[：:]\s*(.+)$').firstMatch(line);
-      if (bluetoothMatch != null) { current['bluetoothName'] = bluetoothMatch.group(1)!.trim(); continue; }
-    }
-
-    if (current['mac']!.isNotEmpty && current['key']!.isNotEmpty) blocks.add(Map.from(current));
-    if (blocks.isEmpty) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未识别到有效门禁参数')));
       return;
     }
 
@@ -292,27 +284,34 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
 
     var added = 0;
-    for (final b in blocks) {
+    var duplicate = 0;
+    for (final b in parsedBlocks) {
       final mac = b['mac']!.toUpperCase();
-      if (locks.any((l) => l.mac.toUpperCase() == mac)) continue;
-      final bluetoothName = b['bluetoothName']!.isNotEmpty
-          ? b['bluetoothName']!.toUpperCase()
-          : LockProtocol.deriveBluetoothNameFromMac(mac);
+      final key = b['key']!.toUpperCase();
+      if (locks.any((l) => l.mac.toUpperCase() == mac && l.productKey.toUpperCase() == key)) {
+        duplicate++;
+        continue;
+      }
+      final bluetoothName = b['bluetoothName']!.isNotEmpty ? b['bluetoothName']!.toUpperCase() : LockProtocol.deriveBluetoothNameFromMac(mac);
       locks.add(LockConfig(
         doorName: b['doorName']!.isEmpty ? '导入门禁' : b['doorName']!,
         mac: mac,
         bluetoothName: bluetoothName,
-        productKey: b['key']!.toUpperCase(),
+        productKey: key,
       ));
       added++;
     }
 
     final list = locks.map((e) => e.toJson()).toList();
     await prefs.setString('locks', jsonEncode(list));
+
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('成功导入 $added 个门禁')));
+      final msg = added > 0 ? '成功导入 $added 个门禁${duplicate > 0 ? '，跳过 $duplicate 个重复' : ''}' : '门禁已存在，无需重复导入';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
+
+  // ========== UI 构建 ==========
 
   Widget _buildInput({
     required TextEditingController controller,
@@ -391,19 +390,32 @@ class _ConfigScreenState extends State<ConfigScreen> {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   _buildInput(controller: _doorNameController, label: '门禁名称', hint: '如 默认大门', validator: (v) => (v == null || v.trim().isEmpty) ? '请输入门禁名称' : null),
                   const SizedBox(height: 16),
-                  _buildInput(controller: _macController, label: '门禁 MAC', note: '(macNum)', hint: 'AA:BB:CC:DD:EE:FF', suffixIcon: IconButton(icon: const Icon(Icons.auto_fix_high, size: 20), onPressed: _autoFillBluetoothName), validator: (v) {
-                    if (v == null || v.trim().isEmpty) return '请输入 MAC 地址';
-                    if (!LockProtocol.isValidMac(v.trim())) return 'MAC 格式不正确';
-                    return null;
-                  }),
+                  _buildInput(
+                    controller: _macController,
+                    label: '门禁 MAC',
+                    note: '(macNum)',
+                    hint: 'AA:BB:CC:DD:EE:FF',
+                    suffixIcon: IconButton(icon: const Icon(Icons.auto_fix_high, size: 20), onPressed: _autoFillBluetoothName),
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) return '请输入 MAC 地址';
+                      if (!LockProtocol.isValidMac(v.trim())) return 'MAC 格式不正确';
+                      return null;
+                    },
+                  ),
                   const SizedBox(height: 16),
                   _buildInput(controller: _bluetoothNameController, label: '蓝牙名称', hint: '如 BY123456789', validator: (v) => (v == null || v.trim().isEmpty) ? '请输入蓝牙名称' : null),
                   const SizedBox(height: 16),
-                  _buildInput(controller: _productKeyController, label: '门禁 Key', note: '(productKey)', hint: '16~32 位十六进制', validator: (v) {
-                    if (v == null || v.trim().isEmpty) return '请输入产品密钥';
-                    if (!LockProtocol.isValidKey(v.trim())) return '密钥格式不正确';
-                    return null;
-                  }),
+                  _buildInput(
+                    controller: _productKeyController,
+                    label: '门禁 Key',
+                    note: '(productKey)',
+                    hint: '16~32 位十六进制',
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) return '请输入产品密钥';
+                      if (!LockProtocol.isValidKey(v.trim())) return '密钥格式不正确';
+                      return null;
+                    },
+                  ),
                   const SizedBox(height: 16),
                   _buildInput(controller: _unlockKeyController, label: '开锁密钥', note: '(可选)', hint: '如与产品密钥相同可留空'),
                   const SizedBox(height: 20),
@@ -466,9 +478,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
                     child: ElevatedButton(
                       onPressed: _fetching ? null : _fetchRemoteConfig,
                       style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF14B8A6), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 24)),
-                      child: _fetching
-                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Text('获取配置', style: TextStyle(fontWeight: FontWeight.w600)),
+                      child: _fetching ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('获取配置', style: TextStyle(fontWeight: FontWeight.w600)),
                     ),
                   ),
                 ),
@@ -487,7 +497,10 @@ class _ConfigScreenState extends State<ConfigScreen> {
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFC7D2FE).withOpacity(0.5))),
-                  child: const Text('一键复制可生成参数文本，建议保存到微信收藏；一键导入可粘贴备份文本恢复门禁配置，不会覆盖已有门禁。', style: TextStyle(fontSize: 12, color: Color(0xFF475569), height: 1.6)),
+                  child: const Text(
+                    '一键复制可生成参数文本，建议保存到微信收藏；一键导入可粘贴备份文本恢复门禁配置，不会覆盖已有门禁。',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF475569), height: 1.6),
+                  ),
                 ),
               ]),
             ),
