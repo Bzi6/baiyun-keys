@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/lock_config.dart';
 import '../services/lock_protocol.dart';
+import '../services/api_service.dart';
 
 class ConfigScreen extends StatefulWidget {
   final LockConfig? config;
@@ -18,14 +19,22 @@ class _ConfigScreenState extends State<ConfigScreen> {
   late TextEditingController _productKeyController;
   late TextEditingController _unlockKeyController;
 
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _idcardController = TextEditingController();
+  bool _fetching = false;
+
   @override
   void initState() {
     super.initState();
-    _doorNameController = TextEditingController(text: widget.config?.doorName ?? '');
+    _doorNameController =
+        TextEditingController(text: widget.config?.doorName ?? '');
     _macController = TextEditingController(text: widget.config?.mac ?? '');
-    _bluetoothNameController = TextEditingController(text: widget.config?.bluetoothName ?? '');
-    _productKeyController = TextEditingController(text: widget.config?.productKey ?? '');
-    _unlockKeyController = TextEditingController(text: widget.config?.unlockKey ?? '');
+    _bluetoothNameController =
+        TextEditingController(text: widget.config?.bluetoothName ?? '');
+    _productKeyController =
+        TextEditingController(text: widget.config?.productKey ?? '');
+    _unlockKeyController =
+        TextEditingController(text: widget.config?.unlockKey ?? '');
   }
 
   @override
@@ -35,6 +44,8 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _bluetoothNameController.dispose();
     _productKeyController.dispose();
     _unlockKeyController.dispose();
+    _phoneController.dispose();
+    _idcardController.dispose();
     super.dispose();
   }
 
@@ -45,6 +56,75 @@ class _ConfigScreenState extends State<ConfigScreen> {
       if (derived.isNotEmpty) {
         setState(() {
           _bluetoothNameController.text = derived;
+        });
+      }
+    }
+  }
+
+  Future<void> _fetchRemoteConfig() async {
+    final phone = _phoneController.text.trim();
+    final idcard = _idcardController.text.trim();
+
+    if (phone.isEmpty || idcard.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请输入手机号和身份证号')),
+      );
+      return;
+    }
+
+    setState(() {
+      _fetching = true;
+    });
+
+    try {
+      final loginResult = await ApiService.login(phone, idcard);
+      if (loginResult['state'] != true) {
+        throw Exception(loginResult['msg'] ?? '登录失败');
+      }
+
+      final token = loginResult['extension'] ?? '';
+      final loginUser = (loginResult['obj']?['id'] ?? '').toString();
+
+      if (token.isEmpty || loginUser.isEmpty) {
+        throw Exception('获取登录信息失败');
+      }
+
+      final listResult =
+          await ApiService.getEntranceGuardList(token, loginUser);
+
+      final List<dynamic> guardList = listResult['obj']?['list'] ?? [];
+      if (guardList.isEmpty) {
+        throw Exception('未找到门禁配置');
+      }
+
+      final guard = guardList[0];
+      final name = guard['name'] ?? guard['address'] ?? '自动获取门禁';
+      final mac = guard['macNum'] ?? '';
+      final productKey = guard['productKey'] ?? '';
+      final bluetoothName = LockProtocol.deriveBluetoothNameFromMac(mac);
+
+      setState(() {
+        _doorNameController.text = name;
+        _macController.text = mac;
+        _bluetoothNameController.text = bluetoothName;
+        _productKeyController.text = productKey;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('成功获取 ${guardList.length} 个门禁，已填充第一个')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('获取失败: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _fetching = false;
         });
       }
     }
@@ -65,141 +145,389 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
   }
 
+  Widget _buildInput({
+    required TextEditingController controller,
+    required String label,
+    String? hint,
+    String? note,
+    Widget? suffixIcon,
+    String? Function(String?)? validator,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF475569)),
+            ),
+            if (note != null) ...[
+              const SizedBox(width: 6),
+              Text(
+                note,
+                style:
+                    const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: controller,
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
+            filled: true,
+            fillColor: const Color(0xFFF8FAFC),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Color(0xFF2563EB)),
+            ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            suffixIcon: suffixIcon,
+          ),
+          validator: validator,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCard({required String title, required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border:
+            Border.all(color: const Color(0xFFE6EBF1).withOpacity(0.5)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F172A).withOpacity(0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF0F172A)),
+          ),
+          const SizedBox(height: 18),
+          child,
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFEDF2FB),
       appBar: AppBar(
-        title: Text(widget.config == null ? '添加门禁' : '编辑门禁'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: Text(
+          widget.config == null ? '添加门禁' : '编辑门禁',
+          style: const TextStyle(
+              color: Color(0xFF0F172A), fontWeight: FontWeight.bold),
+        ),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Color(0xFF0F172A)),
       ),
-      body: Form(
-        key: _formKey,
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFEDF2FB), Color(0xFFF8FAFC)],
+          ),
+        ),
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            TextFormField(
-              controller: _doorNameController,
-              decoration: const InputDecoration(
-                labelText: '门禁名称',
-                hintText: '例如：家里大门',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.door_front_door),
-              ),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return '请输入门禁名称';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _macController,
-              decoration: InputDecoration(
-                labelText: 'MAC 地址',
-                hintText: '例如：AA:BB:CC:DD:EE:FF',
-                border: const OutlineInputBorder(),
-                prefixIcon: const Icon(Icons.bluetooth),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.auto_fix_high),
-                  tooltip: '自动填充蓝牙名称',
-                  onPressed: _autoFillBluetoothName,
-                ),
-              ),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return '请输入 MAC 地址';
-                }
-                if (!LockProtocol.isValidMac(value.trim())) {
-                  return 'MAC 地址格式不正确，应为 AA:BB:CC:DD:EE:FF';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _bluetoothNameController,
-              decoration: const InputDecoration(
-                labelText: '蓝牙名称',
-                hintText: '例如：BY123456789',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.bluetooth_searching),
-              ),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return '请输入蓝牙名称';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _productKeyController,
-              decoration: const InputDecoration(
-                labelText: '产品密钥 (Product Key)',
-                hintText: '16位十六进制',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.key),
-              ),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return '请输入产品密钥';
-                }
-                if (!LockProtocol.isValidKey(value.trim())) {
-                  return '密钥格式不正确，应为16-32位十六进制';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _unlockKeyController,
-              decoration: const InputDecoration(
-                labelText: '开锁密钥 (可选)',
-                hintText: '如与产品密钥相同可留空',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.lock),
-              ),
-              validator: (value) {
-                if (value != null && value.trim().isNotEmpty) {
-                  if (!LockProtocol.isValidKey(value.trim())) {
-                    return '密钥格式不正确，应为16-32位十六进制';
-                  }
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _save,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-                child: const Text('保存', style: TextStyle(fontSize: 16)),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Card(
-              color: Colors.blue[50],
-              child: Padding(
-                padding: const EdgeInsets.all(12),
+            _buildCard(
+              title: '蓝牙门禁参数',
+              child: Form(
+                key: _formKey,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('配置说明：', style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    const Text('• MAC 地址：门禁设备的蓝牙 MAC 地址'),
-                    const Text('• 蓝牙名称：门禁设备广播的蓝牙名称'),
-                    const Text('• 产品密钥：用于加密通信的 16 位密钥'),
-                    const Text('• 点击 MAC 输入框右侧图标可自动推导蓝牙名称'),
+                    _buildInput(
+                      controller: _doorNameController,
+                      label: '门禁名称',
+                      hint: '如 默认大门',
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return '请输入门禁名称';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    _buildInput(
+                      controller: _macController,
+                      label: '门禁 MAC',
+                      note: '(macNum)',
+                      hint: 'AA:BB:CC:DD:EE:FF',
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.auto_fix_high, size: 20),
+                        onPressed: _autoFillBluetoothName,
+                      ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return '请输入 MAC 地址';
+                        }
+                        if (!LockProtocol.isValidMac(value.trim())) {
+                          return 'MAC 格式不正确';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    _buildInput(
+                      controller: _bluetoothNameController,
+                      label: '蓝牙名称',
+                      hint: '如 BY123456789',
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return '请输入蓝牙名称';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    _buildInput(
+                      controller: _productKeyController,
+                      label: '门禁 Key',
+                      note: '(productKey)',
+                      hint: '16~32 位十六进制',
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return '请输入产品密钥';
+                        }
+                        if (!LockProtocol.isValidKey(value.trim())) {
+                          return '密钥格式不正确';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    _buildInput(
+                      controller: _unlockKeyController,
+                      label: '开锁密钥',
+                      note: '(可选)',
+                      hint: '如与产品密钥相同可留空',
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SizedBox(
+                            height: 48,
+                            child: OutlinedButton(
+                              onPressed: () {},
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(
+                                    color: Color(0xFF93C5FD)),
+                                backgroundColor: const Color(0xFFEFF6FF),
+                                foregroundColor: const Color(0xFF1D4ED8),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                              child: const Text('分享门禁',
+                                  style:
+                                      TextStyle(fontWeight: FontWeight.w600)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: SizedBox(
+                            height: 48,
+                            child: ElevatedButton(
+                              onPressed: _save,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF2563EB),
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                                elevation: 0,
+                              ),
+                              child: const Text('保存配置',
+                                  style:
+                                      TextStyle(fontWeight: FontWeight.w600)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
             ),
+            const SizedBox(height: 16),
+            _buildCard(
+              title: '自动获取配置',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildInput(
+                    controller: _phoneController,
+                    label: '手机号',
+                    hint: '请输入绑定手机号',
+                  ),
+                  const SizedBox(height: 16),
+                  _buildInput(
+                    controller: _idcardController,
+                    label: '身份证号',
+                    hint: '请输入身份证号码',
+                  ),
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: SizedBox(
+                      height: 44,
+                      child: ElevatedButton(
+                        onPressed: _fetching ? null : _fetchRemoteConfig,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF14B8A6),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                        ),
+                        child: _fetching
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white))
+                            : const Text('获取配置',
+                                style:
+                                    TextStyle(fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEEF2FF),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color:
+                              const Color(0xFFC7D2FE).withOpacity(0.5)),
+                    ),
+                    child: const Text(
+                      '1.本功能仅调用官方接口获取数据，不含任何后门，也不会将个人身份信息保存在本地；\n2.门禁参数仅保存在当前设备，建议成功获取后立即复制备份；\n3.本功能会为你自动填充门禁配置。',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF475569),
+                          height: 1.6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildCard(
+              title: '备份/恢复',
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SizedBox(
+                          height: 44,
+                          child: OutlinedButton(
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('请在首页右上角菜单使用备份功能')),
+                              );
+                            },
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(
+                                  color: Color(0xFFBFDBFE)),
+                              backgroundColor: const Color(0xFFF8FBFF),
+                              foregroundColor: const Color(0xFF2563EB),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: const Text('一键复制',
+                                style:
+                                    TextStyle(fontWeight: FontWeight.w600)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: SizedBox(
+                          height: 44,
+                          child: OutlinedButton(
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('请在首页右上角菜单使用恢复功能')),
+                              );
+                            },
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(
+                                  color: Color(0xFFBFDBFE)),
+                              backgroundColor: const Color(0xFFF8FBFF),
+                              foregroundColor: const Color(0xFF2563EB),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: const Text('一键导入',
+                                style:
+                                    TextStyle(fontWeight: FontWeight.w600)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEEF2FF),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color:
+                              const Color(0xFFC7D2FE).withOpacity(0.5)),
+                    ),
+                    child: const Text(
+                      '一键复制可生成参数文本，建议保存到微信收藏；一键导入可粘贴备份文本恢复门禁配置，不会覆盖已有门禁。',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF475569),
+                          height: 1.6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 40),
           ],
         ),
       ),
