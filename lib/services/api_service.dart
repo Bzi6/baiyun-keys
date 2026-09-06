@@ -11,9 +11,9 @@ class ApiService {
       'AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 '
       'MicroMessenger/8.0.40(0x18002824) NetType/WIFI Language/zh_CN miniProgram';
 
-  /// 登录
-  static Future<Map<String, dynamic>> login(String phone, String idcardNo) async {
-    final body = {
+  /// 登录，返回 {token, loginUser}
+  static Future<Map<String, String>> login(String phone, String idcardNo) async {
+    final payload = {
       'phone': phone,
       'idcardNo': idcardNo,
       'sex': 0,
@@ -39,19 +39,58 @@ class ApiService {
         'Content-Type': 'application/json',
         'User-Agent': miniProgramUA,
       },
-      body: jsonEncode(body),
+      body: jsonEncode(payload),
     );
 
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
+    if (response.statusCode != 200) {
+      throw Exception('网络错误: HTTP ${response.statusCode}');
     }
-    throw Exception('登录失败: HTTP ${response.statusCode}');
+
+    final data = jsonDecode(response.body);
+    // 小程序判断登录成功用 code === '0000'
+    if (data['code'] != '0000') {
+      throw Exception(data['msg'] ?? '登录失败');
+    }
+
+    final token = data['extension']?.toString() ?? '';
+    // loginUser 在 data.obj.id 里
+    final obj = data['obj'];
+    String loginUser = '';
+    if (obj is Map && obj['id'] != null) {
+      loginUser = obj['id'].toString();
+    }
+
+    if (token.isEmpty || loginUser.isEmpty) {
+      throw Exception('登录返回数据缺失');
+    }
+
+    return {'token': token, 'loginUser': loginUser};
+  }
+
+  /// 递归查找门禁列表（对应小程序 collectEntranceGuardItems）
+  static List<dynamic> _collectGuardItems(dynamic source) {
+    final merged = <dynamic>[];
+    void walk(dynamic node) {
+      if (node is List) {
+        for (final item in node) {
+          walk(item);
+        }
+        return;
+      }
+      if (node is! Map) return;
+      if (node['data_list'] is List) {
+        merged.addAll(node['data_list']);
+      }
+      if (node['obj'] != null) {
+        walk(node['obj']);
+      }
+    }
+    walk(source);
+    return merged;
   }
 
   /// 获取门禁列表
-  static Future<Map<String, dynamic>> getEntranceGuardList(String token, String loginUser) async {
-    final body = {'pageNum': 0, 'pages': 0, 'pageSize': 0};
-
+  static Future<List<dynamic>> fetchEntranceGuardList(String token, String loginUser) async {
     final response = await http.post(
       Uri.parse('$baseUrl/baiyunuser/entranceguard/getList'),
       headers: {
@@ -60,12 +99,29 @@ class ApiService {
         'TOKEN': token,
         'LOGIN_USER': loginUser,
       },
-      body: jsonEncode(body),
+      body: jsonEncode({'pageNum': 0, 'pages': 0, 'pageSize': 0}),
     );
 
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
+    if (response.statusCode != 200) {
+      throw Exception('网络错误: HTTP ${response.statusCode}');
     }
-    throw Exception('获取门禁列表失败: HTTP ${response.statusCode}');
+
+    final data = jsonDecode(response.body);
+
+    // 先尝试递归查找 data_list
+    final merged = _collectGuardItems(data);
+    if (merged.isNotEmpty) return merged;
+
+    // 备选：如果 obj 是数组直接返回
+    if (data['obj'] is List) {
+      return data['obj'] as List<dynamic>;
+    }
+
+    // 备选：如果 code 不是 0000 抛错
+    if (data['code'] != null && data['code'] != '0000') {
+      throw Exception(data['msg'] ?? '获取门禁列表失败');
+    }
+
+    return [];
   }
 }
