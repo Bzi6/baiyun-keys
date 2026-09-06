@@ -1,24 +1,26 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-/// 平安白云 API 服务（对应小程序 utils/api.js）
+/// 平安白云 API 服务
 class ApiService {
   static const String baseUrl = 'https://www.pinganbaiyun.cn';
+  static const String newBaseUrl = 'https://xcx.pinganbaiyun.cn';
 
-  /// 模拟微信小程序 User-Agent（必须带，否则接口返回维护提示）
+  /// 模拟微信小程序 User-Agent
   static const String miniProgramUA =
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) '
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) '
       'AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 '
-      'MicroMessenger/8.0.40(0x18002824) NetType/WIFI Language/zh_CN miniProgram';
+      'MicroMessenger/8.0.76(0x18004c37) NetType/4G Language/zh_CN';
 
-  /// 登录，返回 {token, loginUser}
+  /// ========== 旧接口（已停用，保留备用）==========
+
   static Future<Map<String, String>> login(String phone, String idcardNo) async {
     final payload = {
       'phone': phone,
       'idcardNo': idcardNo,
       'sex': 0,
       'deviceInfo': {
-        'osVersion': '17.0',
+        'osVersion': '26.0',
         'wifiMac': '02:00:00:00:00:00',
         'brand': 'Apple',
         'os': 0,
@@ -47,13 +49,11 @@ class ApiService {
     }
 
     final data = jsonDecode(response.body);
-    // 小程序判断登录成功用 code === '0000'
     if (data['code'] != '0000') {
       throw Exception(data['msg'] ?? '登录失败');
     }
 
     final token = data['extension']?.toString() ?? '';
-    // loginUser 在 data.obj.id 里
     final obj = data['obj'];
     String loginUser = '';
     if (obj is Map && obj['id'] != null) {
@@ -67,29 +67,6 @@ class ApiService {
     return {'token': token, 'loginUser': loginUser};
   }
 
-  /// 递归查找门禁列表（对应小程序 collectEntranceGuardItems）
-  static List<dynamic> _collectGuardItems(dynamic source) {
-    final merged = <dynamic>[];
-    void walk(dynamic node) {
-      if (node is List) {
-        for (final item in node) {
-          walk(item);
-        }
-        return;
-      }
-      if (node is! Map) return;
-      if (node['data_list'] is List) {
-        merged.addAll(node['data_list']);
-      }
-      if (node['obj'] != null) {
-        walk(node['obj']);
-      }
-    }
-    walk(source);
-    return merged;
-  }
-
-  /// 获取门禁列表
   static Future<List<dynamic>> fetchEntranceGuardList(String token, String loginUser) async {
     final response = await http.post(
       Uri.parse('$baseUrl/baiyunuser/entranceguard/getList'),
@@ -107,41 +84,64 @@ class ApiService {
     }
 
     final data = jsonDecode(response.body);
-
-    // 1. 递归查找 data_list（和小程序一致）
-    final merged = _collectGuardItems(data);
-    if (merged.isNotEmpty) return merged;
-
-    // 2. obj 是数组直接返回
     if (data['obj'] is List && (data['obj'] as List).isNotEmpty) {
       return data['obj'] as List<dynamic>;
     }
+    throw Exception('未获取到门禁信息');
+  }
 
-    // 3. obj 是 Map，尝试各种可能的列表字段
-    if (data['obj'] is Map) {
-      final obj = data['obj'] as Map;
-      for (final key in ['list', 'data_list', 'records', 'items', 'data', 'listData']) {
-        if (obj[key] is List && (obj[key] as List).isNotEmpty) {
-          return obj[key] as List<dynamic>;
-        }
+  /// ========== 新接口（通过抓包的 token 和加密 key 获取）==========
+
+  /// 新接口：通过 cloud_shield_token 和加密 key 获取门禁列表
+  static Future<List<dynamic>> fetchGuardListNewApi(String cloudShieldToken, String encryptedKey) async {
+    if (cloudShieldToken.trim().isEmpty || encryptedKey.trim().isEmpty) {
+      throw Exception('请先在高级设置中填写 cloud_shield_token 和加密 key');
+    }
+
+    final response = await http.post(
+      Uri.parse('$newBaseUrl/p_021_health_passport/api_007_wbyw_002/get_guard_list_by_phone'),
+      headers: {
+        'Content-Type': 'application/json',
+        'cloud_shield_token': cloudShieldToken.trim(),
+        'User-Agent': miniProgramUA,
+        'Referer': 'https://servicewechat.com/wx7966fab772d83beb/1324/page-frame.html',
+      },
+      body: jsonEncode({'key': encryptedKey.trim()}),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('网络错误: HTTP ${response.statusCode}');
+    }
+
+    final data = jsonDecode(response.body);
+
+    // 响应是数组，取第一个元素的 data_list
+    if (data is List && data.isNotEmpty) {
+      final first = data[0];
+      if (first is Map && first['data_list'] is List && (first['data_list'] as List).isNotEmpty) {
+        return first['data_list'] as List<dynamic>;
       }
     }
 
-    // 4. 顶层尝试各种可能的列表字段
-    for (final key in ['list', 'data_list', 'records', 'items', 'data', 'listData']) {
-      if (data[key] is List && (data[key] as List).isNotEmpty) {
-        return data[key] as List<dynamic>;
-      }
+    // 也可能直接是对象
+    if (data is Map && data['data_list'] is List && (data['data_list'] as List).isNotEmpty) {
+      return data['data_list'] as List<dynamic>;
     }
 
-    // 5. 如果 code 不是 0000 抛错
-    if (data['code'] != null && data['code'] != '0000') {
-      throw Exception(data['msg'] ?? '获取门禁列表失败');
-    }
+    throw Exception('未获取到门禁信息，请检查 cloud_shield_token 和加密 key 是否正确');
+  }
 
-    // 6. 都没找到，把原始数据包含在错误信息里方便调试
-    final raw = jsonEncode(data);
-    final preview = raw.length > 500 ? raw.substring(0, 500) : raw;
-    throw Exception('未获取到门禁信息，原始返回: $preview');
+  /// 从蓝牙名称推导 MAC 地址
+  /// bluetoothName 格式: BY + MAC后9位（去掉冒号）
+  /// macPrefix: MAC前3位字符（如 "3E5"）
+  static String deriveMacFromBluetoothName(String bluetoothName, String macPrefix) {
+    final clean = bluetoothName.toUpperCase().replaceAll(RegExp(r'[^0-9A-Z]'), '');
+    if (clean.length < 11) return '';
+    // BY 后面是 9 位 MAC 后缀
+    final macSuffix = clean.substring(2, 11);
+    final fullMac = macPrefix.toUpperCase() + macSuffix;
+    if (fullMac.length != 12) return '';
+    // 格式化为 AA:BB:CC:DD:EE:FF
+    return '${fullMac.substring(0, 2)}:${fullMac.substring(2, 4)}:${fullMac.substring(4, 6)}:${fullMac.substring(6, 8)}:${fullMac.substring(8, 10)}:${fullMac.substring(10, 12)}';
   }
 }
