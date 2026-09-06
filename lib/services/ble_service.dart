@@ -23,70 +23,61 @@ class BleService {
   Future<bool> connectToDevice(LockConfig config, {Duration timeout = const Duration(seconds: 10)}) async {
     try {
       _log('开始扫描蓝牙设备...');
-      // 先停止之前的扫描
       await FlutterBluePlus.stopScan();
-      // 扫描设备（startScan 1.18.2+ 返回 void）
       FlutterBluePlus.startScan(
         timeout: timeout,
         androidUsesFineLocation: true,
       );
-      // 等待扫描结果
       await Future.delayed(const Duration(seconds: 3));
-      // 停止扫描
       await FlutterBluePlus.stopScan();
-      // 从 Stream 获取扫描结果列表
       final scanResults = await FlutterBluePlus.scanResults.first;
-      // 查找目标设备
+
       BluetoothDevice? targetDevice;
       final targetName = LockProtocol.normalizeBluetoothName(config.bluetoothName);
       final derivedName = LockProtocol.deriveBluetoothNameFromMac(config.mac);
       for (final result in scanResults) {
         final deviceName = result.device.platformName.toUpperCase();
         final advName = result.advertisementData.advName.toUpperCase();
-        // 按蓝牙名称匹配
         if (targetName.isNotEmpty && (deviceName.contains(targetName) || advName.contains(targetName))) {
           targetDevice = result.device;
           _log('找到设备（按名称）: ${result.device.platformName}');
           break;
         }
-        // 按推导名称匹配
         if (derivedName.isNotEmpty && (deviceName.contains(derivedName) || advName.contains(derivedName))) {
           targetDevice = result.device;
           _log('找到设备（按推导名称）: ${result.device.platformName}');
           break;
         }
       }
+
       if (targetDevice == null) {
         _log('未找到目标设备，请确认设备已开启且在附近');
         return false;
       }
       _device = targetDevice;
       _log('正在连接设备: ${targetDevice.platformName}');
-      // 连接设备
       await targetDevice.connect(timeout: timeout);
       _log('设备连接成功');
-      // 发现服务
+
       _log('正在发现服务...');
       final services = await targetDevice.discoverServices();
       for (final service in services) {
         for (final char in service.characteristics) {
-          // 查找可写特征值
           if (char.properties.write || char.properties.writeWithoutResponse) {
             _writeChar = char;
             _log('找到写入特征值: ${char.uuid}');
           }
-          // 查找可通知特征值
           if (char.properties.notify || char.properties.indicate) {
             _notifyChar = char;
             _log('找到通知特征值: ${char.uuid}');
           }
-          // 查找可读特征值
           if (char.properties.read) {
             _readChar = char;
             _log('找到读取特征值: ${char.uuid}');
           }
         }
       }
+
       if (_writeChar == null) {
         _log('未找到可写入的蓝牙特征值');
         return false;
@@ -95,7 +86,7 @@ class BleService {
         _log('未找到可读取的蓝牙特征值');
         return false;
       }
-      // 启用通知
+
       if (_notifyChar != null) {
         await _notifyChar!.setNotifyValue(true);
         _notifySubscription = _notifyChar!.lastValueStream.listen((data) {
@@ -118,6 +109,12 @@ class BleService {
     if (hex.length < 6) return;
     final command = hex.substring(4, 6).toUpperCase();
 
+    // 忽略写入回显 (command=05，与发送的数据相同)
+    if (command == '05') {
+      _log('忽略写入回显，等待设备真正回执...');
+      return;
+    }
+
     // 握手指令回执 (command=04)
     if (command == '04') {
       final isSuccess = hex.length > 24;
@@ -132,7 +129,7 @@ class BleService {
       return;
     }
 
-    // 开锁结果解析
+    // 其他类型通知（如开锁结果）
     if (hex.length >= 36) {
       final result = LockProtocol.decodeOpenResult(hex, config.productKey);
       _log('开锁结果: ${result['message']}');
@@ -168,13 +165,13 @@ class BleService {
       );
       _log('发送: ${LockProtocol.bytesToHex(handshakeCmd)}');
 
-      // 3. 发送握手指令
+      // 3. 发送握手指令（write with response，与小程序版一致）
       _unlockResult = Completer<String>();
       await _writeData(handshakeCmd);
 
-      // 4. 等待设备回执（超时 5 秒）
+      // 4. 等待设备回执（超时 8 秒，给设备足够响应时间）
       final result = await _unlockResult!.future.timeout(
-        const Duration(seconds: 5),
+        const Duration(seconds: 8),
         onTimeout: () => '等待门锁响应超时',
       );
       _log('开锁流程结束: $result');
@@ -185,10 +182,10 @@ class BleService {
     }
   }
 
-  /// 写入数据
+  /// 写入数据（write with response，与小程序版一致）
   Future<void> _writeData(Uint8List data) async {
     if (_writeChar == null) return;
-    await _writeChar!.write(data.toList(), withoutResponse: true);
+    await _writeChar!.write(data.toList(), withoutResponse: false);
   }
 
   /// 断开连接
