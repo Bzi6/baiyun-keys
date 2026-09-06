@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/lock_config.dart';
 import '../services/ble_service.dart';
@@ -23,7 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _log = '';
   bool _isUnlocking = false;
   String _statusMessage = '';
-  String _statusTone = 'normal'; // normal / active / error
+  String _statusTone = 'normal';
 
   @override
   void initState() {
@@ -206,13 +207,10 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ListView(
           padding: const EdgeInsets.all(14),
           children: [
-            // 蓝牙门禁卡片
             _buildCard(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('蓝牙门禁', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF111827))),
                 const SizedBox(height: 14),
-
-                // 门禁选择器
                 GestureDetector(
                   onTap: () => setState(() => _selectorOpen = !_selectorOpen),
                   child: Container(
@@ -236,8 +234,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ]),
                   ),
                 ),
-
-                // 下拉列表
                 if (_selectorOpen && _locks.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Container(
@@ -260,8 +256,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     }).toList()),
                   ),
                 ],
-
-                // 门禁信息面板
                 const SizedBox(height: 14),
                 Container(
                   padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
@@ -277,8 +271,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     _buildParamItem('门禁 Key', _paramsHidden ? _maskedKey : (lock?.productKey ?? '—')),
                   ]),
                 ),
-
-                // 开锁按钮
                 const SizedBox(height: 18),
                 Center(
                   child: SizedBox(
@@ -307,8 +299,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: const TextStyle(fontSize: 12, color: Color(0xFF7B8796)),
                   textAlign: TextAlign.center,
                 ),
-
-                // 编辑/删除按钮
                 if (lock != null) ...[
                   const SizedBox(height: 14),
                   Row(children: [
@@ -318,14 +308,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ]),
             ),
-
-            // 状态卡片
             if (_statusMessage.isNotEmpty) ...[
               const SizedBox(height: 12),
               _buildStatusCard(),
             ],
-
-            // 调试日志卡片
             if (_logEnabled) ...[
               const SizedBox(height: 12),
               _buildCard(
@@ -363,7 +349,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ]),
               ),
             ],
-
             const SizedBox(height: 80),
           ],
         ),
