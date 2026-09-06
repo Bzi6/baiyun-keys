@@ -1,0 +1,40 @@
+name: Build‑iOS
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  ios:
+    runs‑on: macos‑14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter‑action@v2
+        with:
+          flutter‑version: '3.24.0'
+
+      - name: Prepare iOS project
+        run: |
+          flutter clean
+          flutter pub get
+          flutter create . --platforms ios
+
+      - name: Install pods
+        working‑directory: ios
+        run: pod install --repo‑update
+
+      - name: Build unsigned ipa
+        run: flutter build ios --release --no‑codesign
+
+      - name: Package ipa
+        run: |
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload
+          zip -r baiyun.ipa Payload
+
+      - name: Upload artifact
+        uses: actions/upload‑artifact@v4
+        with:
+          name: baiyun‑ipa
+          path: build/ios/iphoneos/baiyun.ipa
