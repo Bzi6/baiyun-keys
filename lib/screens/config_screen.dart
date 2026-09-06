@@ -22,7 +22,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
   late TextEditingController _productKeyController;
   late TextEditingController _unlockKeyController;
 
-  // 高级设置
   final TextEditingController _cloudShieldTokenController = TextEditingController();
   final TextEditingController _encryptedKeyController = TextEditingController();
   final TextEditingController _macPrefixController = TextEditingController(text: '3E5');
@@ -85,7 +84,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
   }
 
-  /// 用新接口获取配置
   Future<void> _fetchRemoteConfig() async {
     final token = _cloudShieldTokenController.text.trim();
     final key = _encryptedKeyController.text.trim();
@@ -114,7 +112,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
 
     try {
       await _saveAdvancedSettings();
-
       final list = await ApiService.fetchGuardListNewApi(token, key);
 
       if (list.isEmpty) {
@@ -130,7 +127,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
         throw Exception('返回的门锁参数不完整');
       }
 
-      // 从蓝牙名称推导 MAC
       final mac = ApiService.deriveMacFromBluetoothName(bluetoothName, macPrefix);
 
       setState(() {
@@ -175,7 +171,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
   }
 
-  // ========== 备份功能 ==========
   String _buildBackupText(LockConfig config) {
     final name = config.doorName.trim().isEmpty ? '未命名' : config.doorName.trim();
     final mac = config.mac.trim().isEmpty ? '缺失' : config.mac.trim();
@@ -233,34 +228,42 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
   }
 
-  // ========== 导入功能 ==========
   Future<void> _importBackup() async {
     final controller = TextEditingController();
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('粘贴门禁参数'),
-        content: TextField(
-          controller: controller,
-          maxLines: 8,
-          decoration: const InputDecoration(
-            hintText: '请粘贴一键复制的门禁参数文本',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: controller.text.trim().isEmpty
-                ? null
-                : () => Navigator.pop(context, controller.text),
-            child: const Text('开始导入'),
-          ),
-        ],
-      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('粘贴门禁参数'),
+              content: TextField(
+                controller: controller,
+                maxLines: 8,
+                decoration: const InputDecoration(
+                  hintText: '请粘贴一键复制的门禁参数文本',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) {
+                  setDialogState(() {});
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('取消'),
+                ),
+                TextButton(
+                  onPressed: controller.text.trim().isEmpty
+                      ? null
+                      : () => Navigator.pop(context, controller.text),
+                  child: const Text('开始导入'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
 
     if (result == null || result.trim().isEmpty) return;
@@ -321,9 +324,11 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
 
     if (blocks.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('未识别到有效门禁参数')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未识别到有效门禁参数')),
+        );
+      }
       return;
     }
 
@@ -608,7 +613,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 高级设置（可折叠）
                   Container(
                     decoration: BoxDecoration(
                       color: const Color(0xFFF8FAFC),
