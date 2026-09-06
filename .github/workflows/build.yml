@@ -14,20 +14,33 @@ jobs:
           flutter-version: '3.24.0'
           cache: true
 
-      - name: Fix Chinese package name
-        run: |
-          cp pubspec.yaml pubspec.yaml.bak
-          perl -i -pe 's/^name:\s*.+/name: baiyun_keys/' pubspec.yaml
-          echo "=== pubspec.yaml first 5 lines ==="
-          head -5 pubspec.yaml
-
       - name: flutter clean & pub get
         run: |
           flutter clean
           flutter pub get
 
-      - name: Generate iOS project
-        run: flutter create . --platforms ios --project-name baiyun_keys
+      - name: Regenerate complete iOS project
+        run: |
+          # 备份原有 Info.plist（含蓝牙权限配置）
+          cp ios/Runner/Info.plist /tmp/Info.plist.bak
+          # 删除不完整的 ios 目录
+          rm -rf ios
+          # 重新生成完整 iOS 工程
+          flutter create . --platforms ios --project-name baiyun_keys
+          # 恢复 Info.plist，保留蓝牙权限
+          cp /tmp/Info.plist.bak ios/Runner/Info.plist
+          echo "=== iOS files ==="
+          ls -la ios/
+          ls -la ios/Runner/
+
+      - name: Set iOS deployment target to 13.0
+        run: |
+          cd ios
+          if [ -f Podfile ]; then
+            sed -i '' "s/platform :ios.*/platform :ios, '13.0'/" Podfile
+            echo "=== Podfile head ==="
+            head -5 Podfile
+          fi
 
       - name: pod install
         working-directory: ios
