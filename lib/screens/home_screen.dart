@@ -178,7 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final List<dynamic> locksList = data['locks'];
       int added = 0;
       for (final item in locksList) {
-        if (item is Map) {
+        if (item is Map<String, dynamic>) {
           try {
             final config = LockConfig.fromJson(item);
             setState(() {
