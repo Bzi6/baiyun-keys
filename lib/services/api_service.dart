@@ -108,20 +108,40 @@ class ApiService {
 
     final data = jsonDecode(response.body);
 
-    // 先尝试递归查找 data_list
+    // 1. 递归查找 data_list（和小程序一致）
     final merged = _collectGuardItems(data);
     if (merged.isNotEmpty) return merged;
 
-    // 备选：如果 obj 是数组直接返回
-    if (data['obj'] is List) {
+    // 2. obj 是数组直接返回
+    if (data['obj'] is List && (data['obj'] as List).isNotEmpty) {
       return data['obj'] as List<dynamic>;
     }
 
-    // 备选：如果 code 不是 0000 抛错
+    // 3. obj 是 Map，尝试各种可能的列表字段
+    if (data['obj'] is Map) {
+      final obj = data['obj'] as Map;
+      for (final key in ['list', 'data_list', 'records', 'items', 'data', 'listData']) {
+        if (obj[key] is List && (obj[key] as List).isNotEmpty) {
+          return obj[key] as List<dynamic>;
+        }
+      }
+    }
+
+    // 4. 顶层尝试各种可能的列表字段
+    for (final key in ['list', 'data_list', 'records', 'items', 'data', 'listData']) {
+      if (data[key] is List && (data[key] as List).isNotEmpty) {
+        return data[key] as List<dynamic>;
+      }
+    }
+
+    // 5. 如果 code 不是 0000 抛错
     if (data['code'] != null && data['code'] != '0000') {
       throw Exception(data['msg'] ?? '获取门禁列表失败');
     }
 
-    return [];
+    // 6. 都没找到，把原始数据包含在错误信息里方便调试
+    final raw = jsonEncode(data);
+    final preview = raw.length > 500 ? raw.substring(0, 500) : raw;
+    throw Exception('未获取到门禁信息，原始返回: $preview');
   }
 }
