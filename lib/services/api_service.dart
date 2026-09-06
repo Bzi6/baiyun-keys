@@ -1,606 +1,166 @@
 import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../models/lock_config.dart';
-import '../services/lock_protocol.dart';
-import '../services/api_service.dart';
+import 'package:http/http.dart' as http;
 
-class ConfigScreen extends StatefulWidget {
-  final LockConfig? config;
-  const ConfigScreen({super.key, this.config});
+class ApiService {
+  // ========== 旧接口（手机号+身份证，已部分停用） ==========
+  static const String oldBaseUrl = 'https://www.pinganbaiyun.cn';
 
-  @override
-  State<ConfigScreen> createState() => _ConfigScreenState();
-}
+  /// 旧接口：手机号+身份证登录
+  static Future<String> loginOld(String phone, String idCard) async {
+    final response = await http.post(
+      Uri.parse('$oldBaseUrl/baiyunuser/account/login/v1'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'phone': phone, 'idCard': idCard}),
+    );
 
-class _ConfigScreenState extends State<ConfigScreen> {
-  final _formKey = GlobalKey<FormState>();
-  late TextEditingController _doorNameController;
-  late TextEditingController _macController;
-  late TextEditingController _bluetoothNameController;
-  late TextEditingController _productKeyController;
-  late TextEditingController _unlockKeyController;
-
-  // 旧接口（手机号+身份证）
-  final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _idCardController = TextEditingController();
-  bool _fetchingOld = false;
-
-  // 新接口（高级设置，抓包参数）
-  final TextEditingController _openIdController = TextEditingController();
-  final TextEditingController _encryptedKeyController = TextEditingController();
-  final TextEditingController _macPrefixController = TextEditingController(text: '3E5');
-  bool _advancedExpanded = false;
-  bool _fetchingNew = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _doorNameController = TextEditingController(text: widget.config?.doorName ?? '');
-    _macController = TextEditingController(text: widget.config?.mac ?? '');
-    _bluetoothNameController = TextEditingController(text: widget.config?.bluetoothName ?? '');
-    _productKeyController = TextEditingController(text: widget.config?.productKey ?? '');
-    _unlockKeyController = TextEditingController(text: widget.config?.unlockKey ?? '');
-    _loadAdvancedSettings();
-  }
-
-  Future<void> _loadAdvancedSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _phoneController.text = prefs.getString('fetchPhone') ?? '';
-      _idCardController.text = prefs.getString('fetchIdCard') ?? '';
-      _openIdController.text = prefs.getString('openId') ?? '';
-      _encryptedKeyController.text = prefs.getString('encryptedKey') ?? '';
-      _macPrefixController.text = prefs.getString('macPrefix') ?? '3E5';
-    });
-  }
-
-  Future<void> _saveAdvancedSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('fetchPhone', _phoneController.text.trim());
-    await prefs.setString('fetchIdCard', _idCardController.text.trim());
-    await prefs.setString('openId', _openIdController.text.trim());
-    await prefs.setString('encryptedKey', _encryptedKeyController.text.trim());
-    await prefs.setString('macPrefix', _macPrefixController.text.trim());
-  }
-
-  @override
-  void dispose() {
-    _doorNameController.dispose();
-    _macController.dispose();
-    _bluetoothNameController.dispose();
-    _productKeyController.dispose();
-    _unlockKeyController.dispose();
-    _phoneController.dispose();
-    _idCardController.dispose();
-    _openIdController.dispose();
-    _encryptedKeyController.dispose();
-    _macPrefixController.dispose();
-    super.dispose();
-  }
-
-  void _autoFillBluetoothName() {
-    final mac = _macController.text.trim();
-    if (LockProtocol.isValidMac(mac)) {
-      final derived = LockProtocol.deriveBluetoothNameFromMac(mac);
-      if (derived.isNotEmpty) {
-        setState(() {
-          _bluetoothNameController.text = derived;
-        });
-      }
-    }
-  }
-
-  // ========== 旧接口：手机号+身份证获取配置 ==========
-  Future<void> _fetchRemoteConfigOld() async {
-    final phone = _phoneController.text.trim();
-    final idCard = _idCardController.text.trim().toUpperCase();
-
-    if (phone.isEmpty || phone.length != 11) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入正确的手机号')));
-      return;
-    }
-    if (idCard.isEmpty || idCard.length < 15) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入正确的身份证号')));
-      return;
+    if (response.statusCode != 200) {
+      throw Exception('登录失败: HTTP ${response.statusCode}');
     }
 
-    setState(() => _fetchingOld = true);
-    try {
-      await _saveAdvancedSettings();
-      final token = await ApiService.loginOld(phone, idCard);
-      final list = await ApiService.fetchGuardListOld(token);
-      if (list.isEmpty) throw Exception('未获取到门禁信息（该账号可能没有门禁，或旧接口已停用）');
-
-      final item = list[0];
-      final name = (item['doorName'] ?? item['name'] ?? item['address'] ?? '自动获取门禁').toString().trim();
-      final mac = (item['macNum'] ?? item['mac'] ?? '').toString().trim();
-      final productKey = (item['productKey'] ?? item['key'] ?? '').toString().trim();
-      final bluetoothName = (item['bluetoothName'] ?? '').toString().trim();
-
-      if (mac.isEmpty || productKey.isEmpty) throw Exception('返回的门锁参数不完整');
-
-      setState(() {
-        _doorNameController.text = name;
-        _macController.text = mac.toUpperCase();
-        _bluetoothNameController.text = bluetoothName.isNotEmpty ? bluetoothName.toUpperCase() : LockProtocol.deriveBluetoothNameFromMac(mac);
-        _productKeyController.text = productKey.toUpperCase();
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('成功获取 ${list.length} 个门禁，已填充第一个')));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('获取失败: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _fetchingOld = false);
-    }
-  }
-
-  // ========== 新接口：openId+加密key获取配置 ==========
-  Future<void> _fetchRemoteConfigNew() async {
-    final openId = _openIdController.text.trim();
-    final encryptedKey = _encryptedKeyController.text.trim();
-    final macPrefix = _macPrefixController.text.trim();
-
-    if (openId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请先填写 openId')));
-      setState(() => _advancedExpanded = true);
-      return;
-    }
-    if (encryptedKey.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请先填写加密 key（从抓包获取）')));
-      setState(() => _advancedExpanded = true);
-      return;
-    }
-    if (macPrefix.isEmpty || macPrefix.length != 3) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('MAC前缀必须是3位字符（如 3E5）')));
-      return;
-    }
-
-    setState(() => _fetchingNew = true);
-    try {
-      await _saveAdvancedSettings();
-      final accessToken = await ApiService.getAccessToken(openId);
-      final list = await ApiService.fetchGuardListNewApi(accessToken, encryptedKey);
-      if (list.isEmpty) throw Exception('未获取到门禁信息');
-
-      final item = list[0];
-      final name = (item['address'] ?? item['name'] ?? '自动获取门禁').toString().trim();
-      final productKey = (item['productKey'] ?? '').toString().trim();
-      final bluetoothName = (item['bluetoothName'] ?? '').toString().trim();
-      if (productKey.isEmpty || bluetoothName.isEmpty) throw Exception('返回的门锁参数不完整');
-
-      final mac = ApiService.deriveMacFromBluetoothName(bluetoothName, macPrefix);
-      setState(() {
-        _doorNameController.text = name;
-        _macController.text = mac;
-        _bluetoothNameController.text = bluetoothName.toUpperCase();
-        _productKeyController.text = productKey.toUpperCase();
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('成功获取 ${list.length} 个门禁，已填充第一个，MAC: $mac')));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('获取失败: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _fetchingNew = false);
-    }
-  }
-
-  void _save() {
-    if (_formKey.currentState!.validate()) {
-      final config = LockConfig(
-        doorName: _doorNameController.text.trim(),
-        mac: _macController.text.trim().toUpperCase(),
-        bluetoothName: _bluetoothNameController.text.trim().toUpperCase(),
-        productKey: _productKeyController.text.trim().toUpperCase(),
-        unlockKey: _unlockKeyController.text.trim().isEmpty ? null : _unlockKeyController.text.trim().toUpperCase(),
-      );
-      Navigator.pop(context, config);
-    }
-  }
-
-  // ========== 备份恢复（按照小程序源码逻辑） ==========
-
-  String _buildCopyPayload(LockConfig config) {
-    final name = config.doorName.trim().isEmpty ? '未命名' : config.doorName.trim();
-    final mac = config.mac.trim().isEmpty ? '缺失' : config.mac.trim();
-    final key = config.productKey.trim().isEmpty ? '缺失' : config.productKey.trim();
-    final bluetoothName = config.bluetoothName.trim();
-    final lines = ['门禁名称：$name', 'MAC：$mac', 'Key：$key'];
-    final derived = LockProtocol.deriveBluetoothNameFromMac(mac);
-    if (bluetoothName.isNotEmpty && derived.isNotEmpty && bluetoothName.toUpperCase() != derived.toUpperCase()) {
-      lines.add('蓝牙名称：$bluetoothName');
-    }
-    return lines.join('\n');
-  }
-
-  String _buildCopyPayloadList(List<LockConfig> configs) {
-    if (configs.isEmpty) return '';
-    if (configs.length == 1) return _buildCopyPayload(configs[0]);
-    return configs.asMap().entries.map((e) => '【门禁 ${e.key + 1}】\n${_buildCopyPayload(e.value)}').join('\n\n');
-  }
-
-  List<Map<String, String>> _parseBackupDoorsFromText(String text) {
-    final raw = text.trim();
-    if (raw.isEmpty) return [];
-    final lines = raw.split(RegExp(r'\r?\n'));
-    final blocks = <Map<String, String>>[];
-    var current = {'doorName': '', 'mac': '', 'key': '', 'bluetoothName': ''};
-
-    void pushCurrentIfNeeded() {
-      if (current['doorName']!.isNotEmpty || current['mac']!.isNotEmpty || current['key']!.isNotEmpty || current['bluetoothName']!.isNotEmpty) {
-        blocks.add(Map.from(current));
-        current = {'doorName': '', 'mac': '', 'key': '', 'bluetoothName': ''};
+    final data = jsonDecode(response.body);
+    if (data is Map && data['code'] == 200 && data['obj'] != null) {
+      final obj = data['obj'];
+      if (obj is Map && obj['token'] != null) {
+        return obj['token'].toString();
       }
     }
 
-    for (final rawLine in lines) {
-      final line = rawLine.trim();
-      if (line.isEmpty) continue;
-      if (RegExp(r'^【门禁\s*\d+】$').hasMatch(line)) {
-        pushCurrentIfNeeded();
-        continue;
-      }
-      final nameMatch = RegExp(r'^门禁名称[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
-      if (nameMatch != null) { current['doorName'] = nameMatch.group(1)!.trim(); continue; }
-      final macMatch = RegExp(r'^MAC[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
-      if (macMatch != null) { current['mac'] = macMatch.group(1)!.trim(); continue; }
-      final keyMatch = RegExp(r'^Key[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
-      if (keyMatch != null) { current['key'] = keyMatch.group(1)!.trim(); continue; }
-      final bluetoothMatch = RegExp(r'^蓝牙名称[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
-      if (bluetoothMatch != null) { current['bluetoothName'] = bluetoothMatch.group(1)!.trim(); continue; }
-    }
-    pushCurrentIfNeeded();
-
-    return blocks.where((item) {
-      final mac = item['mac'] ?? '';
-      final key = item['key'] ?? '';
-      return LockProtocol.isValidMac(mac) && LockProtocol.isValidKey(key);
-    }).toList();
+    final msg = data is Map ? (data['msg'] ?? data['message'] ?? '登录失败') : '登录失败';
+    throw Exception(msg.toString());
   }
 
-  Future<void> _copyBackup() async {
-    final prefs = await SharedPreferences.getInstance();
-    final locksJson = prefs.getString('locks');
-    if (locksJson == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('暂无可备份的门禁')));
-      return;
-    }
-    final List<dynamic> list = jsonDecode(locksJson);
-    final locks = list.map((e) => LockConfig.fromJson(e as Map<String, dynamic>)).toList();
-    if (locks.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('暂无可备份的门禁')));
-      return;
-    }
-    final backupText = _buildCopyPayloadList(locks);
-    await Clipboard.setData(ClipboardData(text: backupText));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已复制 ${locks.length} 套门禁到剪贴板，请妥善保存')));
-    }
-  }
-
-  Future<void> _importBackup() async {
-    final controller = TextEditingController();
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text('粘贴门禁参数'),
-              content: TextField(
-                controller: controller,
-                maxLines: 8,
-                decoration: const InputDecoration(hintText: '请粘贴一键复制的门禁参数文本', border: OutlineInputBorder()),
-                onChanged: (_) => setDialogState(() {}),
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-                TextButton(
-                  onPressed: controller.text.trim().isEmpty ? null : () => Navigator.pop(context, controller.text),
-                  child: const Text('开始导入'),
-                ),
-              ],
-            );
-          },
-        );
+  /// 旧接口：获取门禁列表
+  static Future<List<dynamic>> fetchGuardListOld(String token) async {
+    final response = await http.post(
+      Uri.parse('$oldBaseUrl/baiyunuser/entranceguard/getList'),
+      headers: {
+        'Content-Type': 'application/json',
+        'token': token,
       },
+      body: jsonEncode({}),
     );
 
-    if (result == null || result.trim().isEmpty) return;
+    if (response.statusCode != 200) {
+      throw Exception('获取门禁列表失败: HTTP ${response.statusCode}');
+    }
 
-    final parsedBlocks = _parseBackupDoorsFromText(result);
-    if (parsedBlocks.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未识别到有效门禁参数，请检查格式')));
+    final data = jsonDecode(response.body);
+    if (data is Map && data['code'] == 200 && data['obj'] is List) {
+      return data['obj'] as List<dynamic>;
+    }
+
+    final msg = data is Map ? (data['msg'] ?? data['message'] ?? '未获取到门禁信息') : '未获取到门禁信息';
+    throw Exception(msg.toString());
+  }
+
+  // ========== 新接口（openId+加密key，抓包参数） ==========
+  static const String newBaseUrl = 'https://xcx.pinganbaiyun.cn';
+
+  static const String miniProgramUA =
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) '
+      'AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 '
+      'MicroMessenger/8.0.76(0x18004c37) NetType/4G Language/zh_CN';
+
+  /// 新接口：通过 openId 获取 access_token（即 cloud_shield_token）
+  static Future<String> getAccessToken(String openId) async {
+    final response = await http.post(
+      Uri.parse('$newBaseUrl/mini_program/api_01/check_state'),
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': miniProgramUA,
+      },
+      body: jsonEncode({'openId': openId, 'oper_type': 'INDEX'}),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('获取access_token失败: HTTP ${response.statusCode}');
+    }
+
+    final data = jsonDecode(response.body);
+    if (data is List && data.isNotEmpty) {
+      final first = data[0];
+      if (first is Map && first['access_token'] != null) {
+        return first['access_token'].toString();
       }
-      return;
+    }
+    throw Exception('获取access_token失败，请检查 openId 是否正确');
+  }
+
+  /// 新接口：通过 openId + access_token 登录，获取用户信息
+  static Future<Map<String, String>> loginByOpenId(String openId, String accessToken) async {
+    final response = await http.post(
+      Uri.parse('$newBaseUrl/p_021_health_passport/api_007_wbyw_002/go_home_service_login'),
+      headers: {
+        'Content-Type': 'application/json',
+        'cloud_shield_token': accessToken,
+        'User-Agent': miniProgramUA,
+      },
+      body: jsonEncode({'openId': openId, 'login_token': ''}),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('登录失败: HTTP ${response.statusCode}');
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    final locksJson = prefs.getString('locks');
-    List<LockConfig> locks = [];
-    if (locksJson != null) {
-      final List<dynamic> list = jsonDecode(locksJson);
-      locks = list.map((e) => LockConfig.fromJson(e as Map<String, dynamic>)).toList();
-    }
-
-    var added = 0;
-    var duplicate = 0;
-    for (final b in parsedBlocks) {
-      final mac = b['mac']!.toUpperCase();
-      final key = b['key']!.toUpperCase();
-      if (locks.any((l) => l.mac.toUpperCase() == mac && l.productKey.toUpperCase() == key)) {
-        duplicate++;
-        continue;
+    final data = jsonDecode(response.body);
+    if (data is List && data.isNotEmpty) {
+      final first = data[0];
+      if (first is Map) {
+        return {
+          'token': first['token']?.toString() ?? '',
+          'name': first['name']?.toString() ?? '',
+          'phone': first['phone']?.toString() ?? '',
+          'id_card': first['id_card']?.toString() ?? '',
+        };
       }
-      final bluetoothName = b['bluetoothName']!.isNotEmpty ? b['bluetoothName']!.toUpperCase() : LockProtocol.deriveBluetoothNameFromMac(mac);
-      locks.add(LockConfig(
-        doorName: b['doorName']!.isEmpty ? '导入门禁' : b['doorName']!,
-        mac: mac,
-        bluetoothName: bluetoothName,
-        productKey: key,
-      ));
-      added++;
+    }
+    throw Exception('登录失败，返回数据异常');
+  }
+
+  /// 新接口：获取门禁列表（需要 access_token + RSA加密的key）
+  static Future<List<dynamic>> fetchGuardListNewApi(String accessToken, String encryptedKey) async {
+    if (accessToken.trim().isEmpty || encryptedKey.trim().isEmpty) {
+      throw Exception('请先填写 openId 和加密 key');
     }
 
-    final list = locks.map((e) => e.toJson()).toList();
-    await prefs.setString('locks', jsonEncode(list));
+    final response = await http.post(
+      Uri.parse('$newBaseUrl/p_021_health_passport/api_007_wbyw_002/get_guard_list_by_phone'),
+      headers: {
+        'Content-Type': 'application/json',
+        'cloud_shield_token': accessToken.trim(),
+        'User-Agent': miniProgramUA,
+        'Referer': 'https://servicewechat.com/wx7966fab772d83beb/1324/page-frame.html',
+      },
+      body: jsonEncode({'key': encryptedKey.trim()}),
+    );
 
-    if (mounted) {
-      final msg = added > 0 ? '成功导入 $added 个门禁${duplicate > 0 ? '，跳过 $duplicate 个重复' : ''}' : '门禁已存在，无需重复导入';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    if (response.statusCode != 200) {
+      throw Exception('网络错误: HTTP ${response.statusCode}');
     }
+
+    final data = jsonDecode(response.body);
+
+    if (data is List && data.isNotEmpty) {
+      final first = data[0];
+      if (first is Map && first['data_list'] is List && (first['data_list'] as List).isNotEmpty) {
+        return first['data_list'] as List<dynamic>;
+      }
+    }
+
+    if (data is Map && data['data_list'] is List && (data['data_list'] as List).isNotEmpty) {
+      return data['data_list'] as List<dynamic>;
+    }
+
+    throw Exception('未获取到门禁信息，请检查加密 key 是否正确（key每次抓包都会变化，需重新抓取）');
   }
 
-  // ========== UI 构建 ==========
-
-  Widget _buildInput({
-    required TextEditingController controller,
-    required String label,
-    String? hint,
-    String? note,
-    Widget? suffixIcon,
-    String? Function(String?)? validator,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(children: [
-          Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF475569))),
-          if (note != null) ...[
-            const SizedBox(width: 6),
-            Text(note, style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8))),
-          ],
-        ]),
-        const SizedBox(height: 8),
-        TextFormField(
-          controller: controller,
-          decoration: InputDecoration(
-            hintText: hint,
-            hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
-            filled: true,
-            fillColor: const Color(0xFFF8FAFC),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF2563EB))),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            suffixIcon: suffixIcon,
-          ),
-          validator: validator,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCard({required String title, required Widget child}) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE6EBF1).withOpacity(0.5)),
-        boxShadow: [BoxShadow(color: const Color(0xFF0F172A).withOpacity(0.05), blurRadius: 12, offset: const Offset(0, 4))],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF0F172A))),
-        const SizedBox(height: 18),
-        child,
-      ]),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFEDF2FB),
-      appBar: AppBar(
-        title: Text(widget.config == null ? '添加门禁' : '编辑门禁', style: const TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.white,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Color(0xFF0F172A)),
-      ),
-      body: Container(
-        decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFFEDF2FB), Color(0xFFF8FAFC)])),
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            // 蓝牙门禁参数
-            _buildCard(
-              title: '蓝牙门禁参数',
-              child: Form(
-                key: _formKey,
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  _buildInput(controller: _doorNameController, label: '门禁名称', hint: '如 默认大门', validator: (v) => (v == null || v.trim().isEmpty) ? '请输入门禁名称' : null),
-                  const SizedBox(height: 16),
-                  _buildInput(
-                    controller: _macController,
-                    label: '门禁 MAC',
-                    note: '(macNum)',
-                    hint: 'AA:BB:CC:DD:EE:FF',
-                    suffixIcon: IconButton(icon: const Icon(Icons.auto_fix_high, size: 20), onPressed: _autoFillBluetoothName),
-                    validator: (v) {
-                      if (v == null || v.trim().isEmpty) return '请输入 MAC 地址';
-                      if (!LockProtocol.isValidMac(v.trim())) return 'MAC 格式不正确';
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  _buildInput(controller: _bluetoothNameController, label: '蓝牙名称', hint: '如 BY123456789', validator: (v) => (v == null || v.trim().isEmpty) ? '请输入蓝牙名称' : null),
-                  const SizedBox(height: 16),
-                  _buildInput(
-                    controller: _productKeyController,
-                    label: '门禁 Key',
-                    note: '(productKey)',
-                    hint: '16~32 位十六进制',
-                    validator: (v) {
-                      if (v == null || v.trim().isEmpty) return '请输入产品密钥';
-                      if (!LockProtocol.isValidKey(v.trim())) return '密钥格式不正确';
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  _buildInput(controller: _unlockKeyController, label: '开锁密钥', note: '(可选)', hint: '如与产品密钥相同可留空'),
-                  const SizedBox(height: 20),
-                  Row(children: [
-                    Expanded(child: SizedBox(height: 48, child: OutlinedButton(onPressed: () {}, style: OutlinedButton.styleFrom(side: const BorderSide(color: Color(0xFF93C5FD)), backgroundColor: const Color(0xFFEFF6FF), foregroundColor: const Color(0xFF1D4ED8), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: const Text('分享门禁', style: TextStyle(fontWeight: FontWeight.w600))))),
-                    const SizedBox(width: 12),
-                    Expanded(child: SizedBox(height: 48, child: ElevatedButton(onPressed: _save, style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2563EB), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0), child: const Text('保存配置', style: TextStyle(fontWeight: FontWeight.w600))))),
-                  ]),
-                ]),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // 自动获取配置（方式一：手机号+身份证，旧接口）
-            _buildCard(
-              title: '自动获取配置（方式一：手机号+身份证）',
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                _buildInput(
-                  controller: _phoneController,
-                  label: '手机号',
-                  hint: '请输入手机号',
-                ),
-                const SizedBox(height: 16),
-                _buildInput(
-                  controller: _idCardController,
-                  label: '身份证号',
-                  hint: '请输入身份证号',
-                ),
-                const SizedBox(height: 16),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: SizedBox(
-                    height: 44,
-                    child: ElevatedButton(
-                      onPressed: _fetchingOld ? null : _fetchRemoteConfigOld,
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF14B8A6), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 24)),
-                      child: _fetchingOld ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('获取配置', style: TextStyle(fontWeight: FontWeight.w600)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: const Color(0xFFFFFBEB), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFFDE68A))),
-                  child: const Text(
-                    '注意：旧接口可能已部分停用，部分账号可能返回空或被拒绝。如果获取失败，请尝试下方方式二（抓包参数）。',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF92400E), height: 1.5),
-                  ),
-                ),
-              ]),
-            ),
-            const SizedBox(height: 16),
-
-            // 自动获取配置（方式二：抓包参数，新接口）
-            _buildCard(
-              title: '自动获取配置（方式二：抓包参数）',
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Container(
-                  decoration: BoxDecoration(color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE2E8F0))),
-                  child: Column(children: [
-                    GestureDetector(
-                      onTap: () => setState(() => _advancedExpanded = !_advancedExpanded),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        child: Row(children: [
-                          const Icon(Icons.settings, size: 18, color: Color(0xFF64748B)),
-                          const SizedBox(width: 8),
-                          const Expanded(child: Text('高级设置（抓包参数）', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF334155)))),
-                          Icon(_advancedExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, size: 20, color: const Color(0xFF94A3B8)),
-                        ]),
-                      ),
-                    ),
-                    if (_advancedExpanded)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                        child: Column(children: [
-                          const Divider(height: 1),
-                          const SizedBox(height: 16),
-                          _buildInput(controller: _openIdController, label: 'openId', hint: '从抓包获取，如 o7fwU0bbq...'),
-                          const SizedBox(height: 16),
-                          _buildInput(controller: _encryptedKeyController, label: '加密 key', hint: '从抓包获取，请求体里的 key 字段（每次抓包都会变化）'),
-                          const SizedBox(height: 16),
-                          _buildInput(controller: _macPrefixController, label: 'MAC 前缀（3位）', note: '默认 3E5', hint: '如 3E5'),
-                          const SizedBox(height: 12),
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(color: const Color(0xFFFFFBEB), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFFDE68A))),
-                            child: const Text(
-                              '用 Stream 抓包平安白云小程序：\n1. openId 从 check_state 或 login 接口的请求体里复制（固定不变）\n2. 加密 key 从 get_guard_list_by_phone 请求体里复制（每次打开小程序都会变化，需重新抓）\n3. 填好后点获取配置，会自动获取门禁参数',
-                              style: TextStyle(fontSize: 12, color: Color(0xFF92400E), height: 1.5),
-                            ),
-                          ),
-                        ]),
-                      ),
-                  ]),
-                ),
-                const SizedBox(height: 16),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: SizedBox(
-                    height: 44,
-                    child: ElevatedButton(
-                      onPressed: _fetchingNew ? null : _fetchRemoteConfigNew,
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF14B8A6), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 24)),
-                      child: _fetchingNew ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('获取配置', style: TextStyle(fontWeight: FontWeight.w600)),
-                    ),
-                  ),
-                ),
-              ]),
-            ),
-            const SizedBox(height: 16),
-
-            // 备份/恢复
-            _buildCard(
-              title: '备份/恢复',
-              child: Column(children: [
-                Row(children: [
-                  Expanded(child: SizedBox(height: 44, child: OutlinedButton(onPressed: _copyBackup, style: OutlinedButton.styleFrom(side: const BorderSide(color: Color(0xFFBFDBFE)), backgroundColor: const Color(0xFFF8FBFF), foregroundColor: const Color(0xFF2563EB), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: const Text('一键复制', style: TextStyle(fontWeight: FontWeight.w600))))),
-                  const SizedBox(width: 12),
-                  Expanded(child: SizedBox(height: 44, child: OutlinedButton(onPressed: _importBackup, style: OutlinedButton.styleFrom(side: const BorderSide(color: Color(0xFFBFDBFE)), backgroundColor: const Color(0xFFF8FBFF), foregroundColor: const Color(0xFF2563EB), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: const Text('一键导入', style: TextStyle(fontWeight: FontWeight.w600))))),
-                ]),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFC7D2FE).withOpacity(0.5))),
-                  child: const Text(
-                    '一键复制可生成参数文本，建议保存到微信收藏；一键导入可粘贴备份文本恢复门禁配置，不会覆盖已有门禁。',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF475569), height: 1.6),
-                  ),
-                ),
-              ]),
-            ),
-            const SizedBox(height: 40),
-          ],
-        ),
-      ),
-    );
+  /// 从蓝牙名称推导 MAC 地址
+  static String deriveMacFromBluetoothName(String bluetoothName, String macPrefix) {
+    final clean = bluetoothName.toUpperCase().replaceAll(RegExp(r'[^0-9A-Z]'), '');
+    if (clean.length < 11) return '';
+    final macSuffix = clean.substring(2, 11);
+    final fullMac = macPrefix.toUpperCase() + macSuffix;
+    if (fullMac.length != 12) return '';
+    return '${fullMac.substring(0, 2)}:${fullMac.substring(2, 4)}:${fullMac.substring(4, 6)}:${fullMac.substring(6, 8)}:${fullMac.substring(8, 10)}:${fullMac.substring(10, 12)}';
   }
 }
