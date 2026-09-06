@@ -247,7 +247,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         size: 22,
                       ),
                       onPressed: _toggleLog,
-                      tooltip: _showLog ? '隐藏日志' : '显示日志',
                     ),
                     // 备份恢复菜单
                     PopupMenuButton<String>(
@@ -352,42 +351,36 @@ class _HomeScreenState extends State<HomeScreen> {
                                   const SizedBox(height: 2),
                                   Text('蓝牙: ${lock.bluetoothName}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
                                   const SizedBox(height: 10),
-                                  // 渐变开锁按钮
-                                  SizedBox(
-                                    width: double.infinity,
-                                    height: 40,
-                                    child: DecoratedBox(
+                                  // 渐变开锁按钮（改用 GestureDetector，避免嵌套出错）
+                                  GestureDetector(
+                                    onTap: isUnlocking ? null : () => _unlock(lock, index),
+                                    child: Container(
+                                      width: double.infinity,
+                                      height: 40,
                                       decoration: BoxDecoration(
-                                        gradient: _isUnlocking
+                                        gradient: isUnlocking
                                             ? null
                                             : const LinearGradient(
                                                 colors: [Color(0xFF0D9488), Color(0xFF0891B2)],
                                               ),
-                                        color: _isUnlocking ? Colors.grey : null,
+                                        color: isUnlocking ? Colors.grey : null,
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      child: Material(
-                                        color: Colors.transparent,
-                                        child: InkWell(
-                                          borderRadius: BorderRadius.circular(10),
-                                          onPressed: _isUnlocking ? null : () => _unlock(lock, index),
-                                          child: Center(
-                                            child: isUnlocking
-                                                ? const SizedBox(
-                                                    width: 18,
-                                                    height: 18,
-                                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                                  )
-                                                : const Row(
-                                                    mainAxisAlignment: MainAxisAlignment.center,
-                                                    children: [
-                                                      Icon(Icons.lock_open, size: 18, color: Colors.white),
-                                                      SizedBox(width: 6),
-                                                      Text('开锁', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
-                                                    ],
-                                                  ),
-                                          ),
-                                        ),
+                                      child: Center(
+                                        child: isUnlocking
+                                            ? const SizedBox(
+                                                width: 18,
+                                                height: 18,
+                                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                              )
+                                            : const Row(
+                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                children: [
+                                                  Icon(Icons.lock_open, size: 18, color: Colors.white),
+                                                  SizedBox(width: 6),
+                                                  Text('开锁', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
+                                                ],
+                                              ),
                                       ),
                                     ),
                                   ),
@@ -423,7 +416,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addLock,
-        tooltip: '添加门禁',
         backgroundColor: const Color(0xFF0D9488),
         child: const Icon(Icons.add, color: Colors.white),
       ),
