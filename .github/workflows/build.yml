@@ -22,9 +22,6 @@ jobs:
           flutter clean
           flutter pub get
 
-      - name: ensure ios folder
-        run: flutter create . --platforms ios
-
       - name: pod install
         working-directory: ios
         run: |
