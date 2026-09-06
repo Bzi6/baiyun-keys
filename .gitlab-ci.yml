@@ -1,0 +1,53 @@
+# GitLab CI/CD 配置 - Flutter iOS IPA 构建（不签名）
+
+stages:
+  - build
+
+# iOS 构建（不签名）
+build_ios:
+  stage: build
+  # 使用 macOS runner（GitLab 共享 runner 或自有 runner）
+  tags:
+    - macos
+    - xcode
+  image: macos-13-xcode-15
+  variables:
+    FLUTTER_VERSION: "3.24.0"
+  before_script:
+    # 安装 Flutter
+    - git clone https://github.com/flutter/flutter.git -b stable --depth 1
+    - export PATH="$PATH:$PWD/flutter/bin"
+    - flutter --version
+    # 安装依赖
+    - flutter pub get
+    # 安装 CocoaPods
+    - sudo gem install cocoapods
+    - cd ios && pod install && cd ..
+  script:
+    # 构建不签名的 IPA
+    - flutter build ipa --release --no-codesign
+  artifacts:
+    paths:
+      - build/ios/ipa/*.ipa
+    expire_in: 30 days
+  only:
+    - main
+    - master
+    - tags
+
+# 安卓构建（可选，同时产出 APK）
+build_android:
+  stage: build
+  image: cirrusci/flutter:stable
+  before_script:
+    - flutter pub get
+  script:
+    - flutter build apk --release
+  artifacts:
+    paths:
+      - build/app/outputs/flutter-apk/app-release.apk
+    expire_in: 30 days
+  only:
+    - main
+    - master
+    - tags
