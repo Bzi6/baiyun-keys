@@ -19,16 +19,33 @@ jobs:
           flutter clean
           flutter pub get
 
-      - name: Regenerate complete iOS project
+      - name: Regenerate iOS project (with main.dart backup)
         run: |
-          # 备份原有 Info.plist（含蓝牙权限配置）
+          # 备份关键文件
           cp ios/Runner/Info.plist /tmp/Info.plist.bak
+          cp lib/main.dart /tmp/main.dart.bak
+          echo "=== BEFORE: main.dart line count ==="
+          wc -l lib/main.dart
+          echo "=== BEFORE: main.dart content ==="
+          cat lib/main.dart
+
           # 删除不完整的 ios 目录
           rm -rf ios
+
           # 重新生成完整 iOS 工程
           flutter create . --platforms ios --project-name baiyun_keys
-          # 恢复 Info.plist，保留蓝牙权限
+
+          echo "=== AFTER: main.dart line count ==="
+          wc -l lib/main.dart
+          echo "=== AFTER: main.dart content ==="
+          cat lib/main.dart
+
+          # 强制恢复原有 main.dart 和 Info.plist
+          cp /tmp/main.dart.bak lib/main.dart
           cp /tmp/Info.plist.bak ios/Runner/Info.plist
+
+          echo "=== RESTORED: main.dart line count ==="
+          wc -l lib/main.dart
           echo "=== iOS files ==="
           ls -la ios/
           ls -la ios/Runner/
