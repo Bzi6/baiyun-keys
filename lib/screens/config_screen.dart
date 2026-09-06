@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/lock_config.dart';
 import '../services/lock_protocol.dart';
 import '../services/api_service.dart';
@@ -77,10 +80,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
     });
 
     try {
-      // 1. 登录
       final auth = await ApiService.login(phone, idcard);
-
-      // 2. 获取门禁列表（方法名是 fetchEntranceGuardList）
       final list = await ApiService.fetchEntranceGuardList(
         auth['token']!,
         auth['loginUser']!,
@@ -90,7 +90,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
         throw Exception('未获取到门禁信息');
       }
 
-      // 3. 取第一个门禁自动填充（字段映射和小程序一致）
       final item = list[0];
       final name = (item['address'] ?? item['name'] ?? '自动获取门禁').toString().trim();
       final mac = (item['macNum'] ?? '').toString().trim();
@@ -142,6 +141,195 @@ class _ConfigScreenState extends State<ConfigScreen> {
             : _unlockKeyController.text.trim().toUpperCase(),
       );
       Navigator.pop(context, config);
+    }
+  }
+
+  // ========== 备份功能（和小程序格式一致）==========
+  String _buildBackupText(LockConfig config) {
+    final name = config.doorName.trim().isEmpty ? '未命名' : config.doorName.trim();
+    final mac = config.mac.trim().isEmpty ? '缺失' : config.mac.trim();
+    final key = config.productKey.trim().isEmpty ? '缺失' : config.productKey.trim();
+    final bluetoothName = config.bluetoothName.trim();
+
+    final lines = ['门禁名称：$name', 'MAC：$mac', 'Key：$key'];
+
+    final derived = LockProtocol.deriveBluetoothNameFromMac(mac);
+    if (bluetoothName.isNotEmpty &&
+        derived.isNotEmpty &&
+        bluetoothName.toUpperCase() != derived.toUpperCase()) {
+      lines.add('蓝牙名称：$bluetoothName');
+    }
+
+    return lines.join('\n');
+  }
+
+  Future<void> _copyBackup() async {
+    final prefs = await SharedPreferences.getInstance();
+    final locksJson = prefs.getString('locks');
+    if (locksJson == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('暂无可备份的门禁')),
+      );
+      return;
+    }
+
+    final List<dynamic> list = jsonDecode(locksJson);
+    final locks = list.map((e) => LockConfig.fromJson(e as Map<String, dynamic>)).toList();
+
+    if (locks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('暂无可备份的门禁')),
+      );
+      return;
+    }
+
+    String backupText;
+    if (locks.length == 1) {
+      backupText = _buildBackupText(locks[0]);
+    } else {
+      backupText = locks
+          .asMap()
+          .entries
+          .map((e) => '【门禁 ${e.key + 1}】\n${_buildBackupText(e.value)}')
+          .join('\n\n');
+    }
+
+    await Clipboard.setData(ClipboardData(text: backupText));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已复制到剪贴板，请妥善保存')),
+      );
+    }
+  }
+
+  // ========== 导入功能（和小程序源码一致，简单解析）==========
+  Future<void> _importBackup() async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('粘贴门禁参数'),
+        content: TextField(
+          controller: controller,
+          maxLines: 8,
+          decoration: const InputDecoration(
+            hintText: '请粘贴一键复制的门禁参数文本',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: controller.text.trim().isEmpty
+                ? null
+                : () => Navigator.pop(context, controller.text),
+            child: const Text('开始导入'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == null || result.trim().isEmpty) return;
+
+    final lines = result.split(RegExp(r'\r?\n'));
+    final blocks = <Map<String, String>>[];
+    var current = <String, String>{
+      'doorName': '',
+      'mac': '',
+      'key': '',
+      'bluetoothName': '',
+    };
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+
+      if (RegExp(r'^【门禁\s*\d+】$').hasMatch(line)) {
+        if (current['mac']!.isNotEmpty && current['key']!.isNotEmpty) {
+          blocks.add(Map.from(current));
+        }
+        current = {
+          'doorName': '',
+          'mac': '',
+          'key': '',
+          'bluetoothName': '',
+        };
+        continue;
+      }
+
+      final nameMatch = RegExp(r'^门禁名称[：:]\s*(.+)$').firstMatch(line);
+      if (nameMatch != null) {
+        current['doorName'] = nameMatch.group(1)!.trim();
+        continue;
+      }
+
+      final macMatch = RegExp(r'^MAC[：:]\s*(.+)$').firstMatch(line);
+      if (macMatch != null) {
+        current['mac'] = macMatch.group(1)!.trim();
+        continue;
+      }
+
+      final keyMatch = RegExp(r'^Key[：:]\s*(.+)$').firstMatch(line);
+      if (keyMatch != null) {
+        current['key'] = keyMatch.group(1)!.trim();
+        continue;
+      }
+
+      final bluetoothMatch = RegExp(r'^蓝牙名称[：:]\s*(.+)$').firstMatch(line);
+      if (bluetoothMatch != null) {
+        current['bluetoothName'] = bluetoothMatch.group(1)!.trim();
+        continue;
+      }
+    }
+
+    if (current['mac']!.isNotEmpty && current['key']!.isNotEmpty) {
+      blocks.add(Map.from(current));
+    }
+
+    if (blocks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('未识别到有效门禁参数')),
+      );
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final locksJson = prefs.getString('locks');
+    List<LockConfig> locks = [];
+    if (locksJson != null) {
+      final List<dynamic> list = jsonDecode(locksJson);
+      locks = list.map((e) => LockConfig.fromJson(e as Map<String, dynamic>)).toList();
+    }
+
+    var added = 0;
+    for (final b in blocks) {
+      final mac = b['mac']!.toUpperCase();
+      final exists = locks.any((l) => l.mac.toUpperCase() == mac);
+      if (exists) continue;
+
+      final bluetoothName = b['bluetoothName']!.isNotEmpty
+          ? b['bluetoothName']!.toUpperCase()
+          : LockProtocol.deriveBluetoothNameFromMac(mac);
+
+      locks.add(LockConfig(
+        doorName: b['doorName']!.isEmpty ? '导入门禁' : b['doorName']!,
+        mac: mac,
+        bluetoothName: bluetoothName,
+        productKey: b['key']!.toUpperCase(),
+      ));
+      added++;
+    }
+
+    final list = locks.map((e) => e.toJson()).toList();
+    await prefs.setString('locks', jsonEncode(list));
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('成功导入 $added 个门禁')),
+      );
     }
   }
 
@@ -459,12 +647,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
                         child: SizedBox(
                           height: 44,
                           child: OutlinedButton(
-                            onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content: Text('请在首页右上角菜单使用备份功能')),
-                              );
-                            },
+                            onPressed: _copyBackup,
                             style: OutlinedButton.styleFrom(
                               side: const BorderSide(
                                   color: Color(0xFFBFDBFE)),
@@ -484,12 +667,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
                         child: SizedBox(
                           height: 44,
                           child: OutlinedButton(
-                            onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content: Text('请在首页右上角菜单使用恢复功能')),
-                              );
-                            },
+                            onPressed: _importBackup,
                             style: OutlinedButton.styleFrom(
                               side: const BorderSide(
                                   color: Color(0xFFBFDBFE)),
