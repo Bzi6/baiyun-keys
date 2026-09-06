@@ -3,17 +3,22 @@ import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/lock_config.dart';
 import 'lock_protocol.dart';
+
 /// 蓝牙开锁服务
 class BleService {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _writeChar;
   BluetoothCharacteristic? _notifyChar;
+  BluetoothCharacteristic? _readChar;
   StreamSubscription<List<int>>? _notifySubscription;
   final StreamController<String> _logController = StreamController<String>.broadcast();
   Stream<String> get logStream => _logController.stream;
+  Completer<String>? _unlockResult;
+
   void _log(String msg) {
     _logController.add(msg);
   }
+
   /// 扫描并连接设备
   Future<bool> connectToDevice(LockConfig config, {Duration timeout = const Duration(seconds: 10)}) async {
     try {
@@ -75,10 +80,19 @@ class BleService {
             _notifyChar = char;
             _log('找到通知特征值: ${char.uuid}');
           }
+          // 查找可读特征值
+          if (char.properties.read) {
+            _readChar = char;
+            _log('找到读取特征值: ${char.uuid}');
+          }
         }
       }
       if (_writeChar == null) {
         _log('未找到可写入的蓝牙特征值');
+        return false;
+      }
+      if (_readChar == null) {
+        _log('未找到可读取的蓝牙特征值');
         return false;
       }
       // 启用通知
@@ -95,88 +109,88 @@ class BleService {
       return false;
     }
   }
+
   /// 处理通知数据
   void _handleNotification(Uint8List data, LockConfig config) {
     final hex = LockProtocol.bytesToHex(data);
     _log('收到数据: $hex');
-    // 解析开锁结果
+
+    if (hex.length < 6) return;
+    final command = hex.substring(4, 6).toUpperCase();
+
+    // 握手指令回执 (command=04)
+    if (command == '04') {
+      final isSuccess = hex.length > 24;
+      if (isSuccess) {
+        _log('握手成功，门锁已执行开锁');
+        _completeUnlock('握手成功，门锁已开启');
+      } else {
+        final statusField = hex.length >= 18 ? hex.substring(14, 18) : '';
+        _log('握手失败，设备返回码: $statusField');
+        _completeUnlock('握手失败，密码无效');
+      }
+      return;
+    }
+
+    // 开锁结果解析
     if (hex.length >= 36) {
       final result = LockProtocol.decodeOpenResult(hex, config.productKey);
       _log('开锁结果: ${result['message']}');
+      _completeUnlock(result['message'] ?? '未知结果');
     }
   }
-  /// 执行完整开锁流程
+
+  void _completeUnlock(String result) {
+    if (_unlockResult != null && !_unlockResult!.isCompleted) {
+      _unlockResult!.complete(result);
+    }
+  }
+
+  /// 执行完整开锁流程（与小程序版一致：读随机数 → 发握手指令 → 等回执）
   Future<String> unlock(LockConfig config) async {
     try {
-      if (_device == null || _writeChar == null) {
+      if (_device == null || _writeChar == null || _readChar == null) {
         return '设备未连接';
       }
-      // 1. 生成随机数
-      final random = _generateRandomBytes(4);
-      _log('生成随机数: ${LockProtocol.bytesToHex(random)}');
-      // 2. 发送握手指令
+
+      // 1. 从设备读取随机数（4字节）
+      _log('正在读取设备随机数...');
+      final seed = await _readChar!.read();
+      final seedBytes = Uint8List.fromList(seed);
+      _log('随机数: ${LockProtocol.bytesToHex(seedBytes)}');
+
+      // 2. 用 MAC 后 4 字节构建握手指令
       _log('发送握手指令...');
-      final handshakeCmd = LockProtocol.buildHandshakeCommand(
-        random,
-        config.bluetoothName,
-        config.productKey,
-      );
-      await _writeData(handshakeCmd);
-      await Future.delayed(const Duration(milliseconds: 500));
-      // 3. 发送通信密钥指令
-      _log('发送通信密钥指令...');
-      final derivedName = LockProtocol.deriveBluetoothNameFromMac(config.mac);
-      final commKeyCmd = LockProtocol.buildCommKeyCommand(
-        random,
-        derivedName.isNotEmpty ? derivedName : config.bluetoothName,
-        config.productKey,
-      );
-      await _writeData(commKeyCmd);
-      await Future.delayed(const Duration(milliseconds: 500));
-      // 4. 时间同步
-      _log('发送时间同步指令...');
-      final timeHex = LockProtocol.generateTimeHex();
-      final timeBytes = LockProtocol.hexToBytes(timeHex);
-      final timeSyncCmd = LockProtocol.buildTimeSyncCommand(
-        timeBytes,
-        derivedName.isNotEmpty ? derivedName : config.bluetoothName,
-        config.productKey, // 这里应该用 sessionKey，但简化处理先用 productKey
-      );
-      await _writeData(timeSyncCmd);
-      await Future.delayed(const Duration(milliseconds: 500));
-      // 5. 发送开锁指令
-      _log('发送开锁指令...');
-      final unlockKey = config.unlockKey ?? config.productKey;
-      final unlockCmd = LockProtocol.encryptUnlockCommand(
-        random,
+      final handshakeCmd = LockProtocol.buildHandshakeCommandWithMac(
+        seedBytes,
         config.mac,
-        unlockKey,
+        config.productKey,
       );
-      await _writeData(unlockCmd);
-      // 等待回执
-      await Future.delayed(const Duration(seconds: 2));
-      _log('开锁指令已发送');
-      return '开锁指令已发送';
+      _log('发送: ${LockProtocol.bytesToHex(handshakeCmd)}');
+
+      // 3. 发送握手指令
+      _unlockResult = Completer<String>();
+      await _writeData(handshakeCmd);
+
+      // 4. 等待设备回执（超时 5 秒）
+      final result = await _unlockResult!.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => '等待门锁响应超时',
+      );
+      _log('开锁流程结束: $result');
+      return result;
     } catch (e) {
       _log('开锁失败: $e');
       return '开锁失败: $e';
     }
   }
+
   /// 写入数据
   Future<void> _writeData(Uint8List data) async {
     if (_writeChar == null) return;
-    _log('发送: ${LockProtocol.bytesToHex(data)}');
     await _writeChar!.write(data.toList(), withoutResponse: true);
   }
-  /// 生成随机字节
-  Uint8List _generateRandomBytes(int length) {
-    final random = Uint8List(length);
-    for (var i = 0; i < length; i++) {
-      random[i] = DateTime.now().microsecondsSinceEpoch % 256;
-      // 简单的伪随机
-    }
-    return random;
-  }
+
   /// 断开连接
   Future<void> disconnect() async {
     await _notifySubscription?.cancel();
@@ -188,7 +202,10 @@ class BleService {
     _device = null;
     _writeChar = null;
     _notifyChar = null;
+    _readChar = null;
+    _unlockResult = null;
   }
+
   /// 释放资源
   void dispose() {
     _logController.close();
