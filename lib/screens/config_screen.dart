@@ -22,8 +22,11 @@ class _ConfigScreenState extends State<ConfigScreen> {
   late TextEditingController _productKeyController;
   late TextEditingController _unlockKeyController;
 
-  final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _idcardController = TextEditingController();
+  // 高级设置
+  final TextEditingController _cloudShieldTokenController = TextEditingController();
+  final TextEditingController _encryptedKeyController = TextEditingController();
+  final TextEditingController _macPrefixController = TextEditingController(text: '3E5');
+  bool _advancedExpanded = false;
   bool _fetching = false;
 
   @override
@@ -38,6 +41,23 @@ class _ConfigScreenState extends State<ConfigScreen> {
         TextEditingController(text: widget.config?.productKey ?? '');
     _unlockKeyController =
         TextEditingController(text: widget.config?.unlockKey ?? '');
+    _loadAdvancedSettings();
+  }
+
+  Future<void> _loadAdvancedSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _cloudShieldTokenController.text = prefs.getString('cloudShieldToken') ?? '';
+      _encryptedKeyController.text = prefs.getString('encryptedKey') ?? '';
+      _macPrefixController.text = prefs.getString('macPrefix') ?? '3E5';
+    });
+  }
+
+  Future<void> _saveAdvancedSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('cloudShieldToken', _cloudShieldTokenController.text.trim());
+    await prefs.setString('encryptedKey', _encryptedKeyController.text.trim());
+    await prefs.setString('macPrefix', _macPrefixController.text.trim());
   }
 
   @override
@@ -47,8 +67,9 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _bluetoothNameController.dispose();
     _productKeyController.dispose();
     _unlockKeyController.dispose();
-    _phoneController.dispose();
-    _idcardController.dispose();
+    _cloudShieldTokenController.dispose();
+    _encryptedKeyController.dispose();
+    _macPrefixController.dispose();
     super.dispose();
   }
 
@@ -64,13 +85,25 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
   }
 
+  /// 用新接口获取配置
   Future<void> _fetchRemoteConfig() async {
-    final phone = _phoneController.text.trim();
-    final idcard = _idcardController.text.trim().toUpperCase();
+    final token = _cloudShieldTokenController.text.trim();
+    final key = _encryptedKeyController.text.trim();
+    final macPrefix = _macPrefixController.text.trim();
 
-    if (phone.isEmpty || idcard.isEmpty) {
+    if (token.isEmpty || key.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请输入手机号和身份证号')),
+        const SnackBar(content: Text('请先展开高级设置，填写 cloud_shield_token 和加密 key')),
+      );
+      setState(() {
+        _advancedExpanded = true;
+      });
+      return;
+    }
+
+    if (macPrefix.isEmpty || macPrefix.length != 3) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('MAC前缀必须是3位字符（如 3E5）')),
       );
       return;
     }
@@ -80,11 +113,9 @@ class _ConfigScreenState extends State<ConfigScreen> {
     });
 
     try {
-      final auth = await ApiService.login(phone, idcard);
-      final list = await ApiService.fetchEntranceGuardList(
-        auth['token']!,
-        auth['loginUser']!,
-      );
+      await _saveAdvancedSettings();
+
+      final list = await ApiService.fetchGuardListNewApi(token, key);
 
       if (list.isEmpty) {
         throw Exception('未获取到门禁信息');
@@ -92,26 +123,26 @@ class _ConfigScreenState extends State<ConfigScreen> {
 
       final item = list[0];
       final name = (item['address'] ?? item['name'] ?? '自动获取门禁').toString().trim();
-      final mac = (item['macNum'] ?? '').toString().trim();
       final productKey = (item['productKey'] ?? '').toString().trim();
       final bluetoothName = (item['bluetoothName'] ?? '').toString().trim();
 
-      if (mac.isEmpty || productKey.isEmpty) {
+      if (productKey.isEmpty || bluetoothName.isEmpty) {
         throw Exception('返回的门锁参数不完整');
       }
 
+      // 从蓝牙名称推导 MAC
+      final mac = ApiService.deriveMacFromBluetoothName(bluetoothName, macPrefix);
+
       setState(() {
         _doorNameController.text = name;
-        _macController.text = mac.toUpperCase();
-        _bluetoothNameController.text = bluetoothName.isNotEmpty
-            ? bluetoothName.toUpperCase()
-            : LockProtocol.deriveBluetoothNameFromMac(mac);
+        _macController.text = mac;
+        _bluetoothNameController.text = bluetoothName.toUpperCase();
         _productKeyController.text = productKey.toUpperCase();
       });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('成功获取 ${list.length} 个门禁，已填充第一个')),
+          SnackBar(content: Text('成功获取 ${list.length} 个门禁，已填充第一个，MAC: $mac')),
         );
       }
     } catch (e) {
@@ -144,7 +175,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
   }
 
-  // ========== 备份功能（和小程序格式一致）==========
+  // ========== 备份功能 ==========
   String _buildBackupText(LockConfig config) {
     final name = config.doorName.trim().isEmpty ? '未命名' : config.doorName.trim();
     final mac = config.mac.trim().isEmpty ? '缺失' : config.mac.trim();
@@ -202,7 +233,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
   }
 
-  // ========== 导入功能（和小程序源码一致，简单解析）==========
+  // ========== 导入功能 ==========
   Future<void> _importBackup() async {
     final controller = TextEditingController();
     final result = await showDialog<String>(
@@ -577,16 +608,96 @@ class _ConfigScreenState extends State<ConfigScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildInput(
-                    controller: _phoneController,
-                    label: '手机号',
-                    hint: '请输入绑定手机号',
-                  ),
-                  const SizedBox(height: 16),
-                  _buildInput(
-                    controller: _idcardController,
-                    label: '身份证号',
-                    hint: '请输入身份证号码',
+                  // 高级设置（可折叠）
+                  Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                    ),
+                    child: Column(
+                      children: [
+                        GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _advancedExpanded = !_advancedExpanded;
+                            });
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 12),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.settings,
+                                    size: 18, color: Color(0xFF64748B)),
+                                const SizedBox(width: 8),
+                                const Expanded(
+                                  child: Text(
+                                    '高级设置（抓包参数）',
+                                    style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF334155)),
+                                  ),
+                                ),
+                                Icon(
+                                  _advancedExpanded
+                                      ? Icons.keyboard_arrow_up
+                                      : Icons.keyboard_arrow_down,
+                                  size: 20,
+                                  color: const Color(0xFF94A3B8),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (_advancedExpanded)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                            child: Column(
+                              children: [
+                                const Divider(height: 1),
+                                const SizedBox(height: 16),
+                                _buildInput(
+                                  controller: _cloudShieldTokenController,
+                                  label: 'cloud_shield_token',
+                                  hint: '从抓包获取，如 xcx.xxx',
+                                ),
+                                const SizedBox(height: 16),
+                                _buildInput(
+                                  controller: _encryptedKeyController,
+                                  label: '加密 key',
+                                  hint: '从抓包获取，请求体里的 key 字段',
+                                ),
+                                const SizedBox(height: 16),
+                                _buildInput(
+                                  controller: _macPrefixController,
+                                  label: 'MAC 前缀（3位）',
+                                  note: '默认 3E5',
+                                  hint: '如 3E5',
+                                ),
+                                const SizedBox(height: 12),
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFFFBEB),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color: const Color(0xFFFDE68A)),
+                                  ),
+                                  child: const Text(
+                                    '用 Stream 抓包平安白云小程序，找到 get_guard_list_by_phone 请求，复制请求头里的 cloud_shield_token 和请求体里的 key 填到这里。只需要抓一次，会自动保存。',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: Color(0xFF92400E),
+                                        height: 1.5),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 16),
                   Align(
@@ -626,7 +737,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
                               const Color(0xFFC7D2FE).withOpacity(0.5)),
                     ),
                     child: const Text(
-                      '1.本功能仅调用官方接口获取数据，不含任何后门，也不会将个人身份信息保存在本地；\n2.门禁参数仅保存在当前设备，建议成功获取后立即复制备份；\n3.本功能会为你自动填充门禁配置。',
+                      '1.本功能仅调用官方接口获取数据，不含任何后门；\n2.门禁参数仅保存在当前设备，建议成功获取后立即复制备份；\n3.需要先在高级设置中填写抓包获取的 token 和 key。',
                       style: TextStyle(
                           fontSize: 12,
                           color: Color(0xFF475569),
