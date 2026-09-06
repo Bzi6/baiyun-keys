@@ -1,22 +1,21 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+/// 平安白云 API 服务（含新旧两个接口）
 class ApiService {
-  // ========== 旧接口（手机号+身份证，已部分停用） ==========
+  // ========== 旧接口：手机号 + 身份证号 ==========
   static const String oldBaseUrl = 'https://www.pinganbaiyun.cn';
 
-  /// 旧接口：手机号+身份证登录
+  /// 旧接口登录
   static Future<String> loginOld(String phone, String idCard) async {
     final response = await http.post(
       Uri.parse('$oldBaseUrl/baiyunuser/account/login/v1'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'phone': phone, 'idCard': idCard}),
     );
-
     if (response.statusCode != 200) {
       throw Exception('登录失败: HTTP ${response.statusCode}');
     }
-
     final data = jsonDecode(response.body);
     if (data is Map && data['code'] == 200 && data['obj'] != null) {
       final obj = data['obj'];
@@ -24,36 +23,29 @@ class ApiService {
         return obj['token'].toString();
       }
     }
-
     final msg = data is Map ? (data['msg'] ?? data['message'] ?? '登录失败') : '登录失败';
     throw Exception(msg.toString());
   }
 
-  /// 旧接口：获取门禁列表
+  /// 旧接口获取门禁列表
   static Future<List<dynamic>> fetchGuardListOld(String token) async {
     final response = await http.post(
       Uri.parse('$oldBaseUrl/baiyunuser/entranceguard/getList'),
-      headers: {
-        'Content-Type': 'application/json',
-        'token': token,
-      },
+      headers: {'Content-Type': 'application/json', 'token': token},
       body: jsonEncode({}),
     );
-
     if (response.statusCode != 200) {
       throw Exception('获取门禁列表失败: HTTP ${response.statusCode}');
     }
-
     final data = jsonDecode(response.body);
     if (data is Map && data['code'] == 200 && data['obj'] is List) {
       return data['obj'] as List<dynamic>;
     }
-
     final msg = data is Map ? (data['msg'] ?? data['message'] ?? '未获取到门禁信息') : '未获取到门禁信息';
     throw Exception(msg.toString());
   }
 
-  // ========== 新接口（openId+加密key，抓包参数） ==========
+  // ========== 新接口：openId + 加密 key（抓包参数） ==========
   static const String newBaseUrl = 'https://xcx.pinganbaiyun.cn';
 
   static const String miniProgramUA =
@@ -61,21 +53,16 @@ class ApiService {
       'AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 '
       'MicroMessenger/8.0.76(0x18004c37) NetType/4G Language/zh_CN';
 
-  /// 新接口：通过 openId 获取 access_token（即 cloud_shield_token）
+  /// 通过 openId 获取 access_token
   static Future<String> getAccessToken(String openId) async {
     final response = await http.post(
       Uri.parse('$newBaseUrl/mini_program/api_01/check_state'),
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': miniProgramUA,
-      },
+      headers: {'Content-Type': 'application/json', 'User-Agent': miniProgramUA},
       body: jsonEncode({'openId': openId, 'oper_type': 'INDEX'}),
     );
-
     if (response.statusCode != 200) {
       throw Exception('获取access_token失败: HTTP ${response.statusCode}');
     }
-
     final data = jsonDecode(response.body);
     if (data is List && data.isNotEmpty) {
       final first = data[0];
@@ -86,7 +73,7 @@ class ApiService {
     throw Exception('获取access_token失败，请检查 openId 是否正确');
   }
 
-  /// 新接口：通过 openId + access_token 登录，获取用户信息
+  /// 通过 openId + access_token 登录
   static Future<Map<String, String>> loginByOpenId(String openId, String accessToken) async {
     final response = await http.post(
       Uri.parse('$newBaseUrl/p_021_health_passport/api_007_wbyw_002/go_home_service_login'),
@@ -97,11 +84,9 @@ class ApiService {
       },
       body: jsonEncode({'openId': openId, 'login_token': ''}),
     );
-
     if (response.statusCode != 200) {
       throw Exception('登录失败: HTTP ${response.statusCode}');
     }
-
     final data = jsonDecode(response.body);
     if (data is List && data.isNotEmpty) {
       final first = data[0];
@@ -117,12 +102,11 @@ class ApiService {
     throw Exception('登录失败，返回数据异常');
   }
 
-  /// 新接口：获取门禁列表（需要 access_token + RSA加密的key）
+  /// 新接口获取门禁列表
   static Future<List<dynamic>> fetchGuardListNewApi(String accessToken, String encryptedKey) async {
     if (accessToken.trim().isEmpty || encryptedKey.trim().isEmpty) {
       throw Exception('请先填写 openId 和加密 key');
     }
-
     final response = await http.post(
       Uri.parse('$newBaseUrl/p_021_health_passport/api_007_wbyw_002/get_guard_list_by_phone'),
       headers: {
@@ -133,24 +117,19 @@ class ApiService {
       },
       body: jsonEncode({'key': encryptedKey.trim()}),
     );
-
     if (response.statusCode != 200) {
       throw Exception('网络错误: HTTP ${response.statusCode}');
     }
-
     final data = jsonDecode(response.body);
-
     if (data is List && data.isNotEmpty) {
       final first = data[0];
       if (first is Map && first['data_list'] is List && (first['data_list'] as List).isNotEmpty) {
         return first['data_list'] as List<dynamic>;
       }
     }
-
     if (data is Map && data['data_list'] is List && (data['data_list'] as List).isNotEmpty) {
       return data['data_list'] as List<dynamic>;
     }
-
     throw Exception('未获取到门禁信息，请检查加密 key 是否正确（key每次抓包都会变化，需重新抓取）');
   }
 
