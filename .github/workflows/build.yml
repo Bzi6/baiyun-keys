@@ -14,13 +14,20 @@ jobs:
           flutter-version: '3.24.0'
           cache: true
 
-      - name: flutter doctor
-        run: flutter doctor -v
+      - name: Fix Chinese package name
+        run: |
+          cp pubspec.yaml pubspec.yaml.bak
+          perl -i -pe 's/^name:\s*.+/name: baiyun_keys/' pubspec.yaml
+          echo "=== pubspec.yaml first 5 lines ==="
+          head -5 pubspec.yaml
 
       - name: flutter clean & pub get
         run: |
           flutter clean
           flutter pub get
+
+      - name: Generate iOS project
+        run: flutter create . --platforms ios --project-name baiyun_keys
 
       - name: pod install
         working-directory: ios
@@ -28,17 +35,17 @@ jobs:
           pod repo update
           pod install
 
-      - name: build unsigned ios
+      - name: Build unsigned ipa
         run: flutter build ios --release --no-codesign
 
-      - name: make ipa
+      - name: Package ipa
         run: |
           cd build/ios/iphoneos
           mkdir -p Payload
           cp -r Runner.app Payload
           zip -r baiyun.ipa Payload
 
-      - name: upload ipa
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: baiyun-ipa
