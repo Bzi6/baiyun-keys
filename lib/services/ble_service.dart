@@ -39,7 +39,7 @@ class BleService {
       final targetName = LockProtocol.normalizeBluetoothName(config.bluetoothName);
       final derivedName = LockProtocol.deriveBluetoothNameFromMac(config.mac);
 
-      for (final result in FlutterBluePlus.scanResults) {
+      for (final result in scanResults) {
         final deviceName = result.device.platformName.toUpperCase();
         final advName = result.advertisementData.advName.toUpperCase();
 
