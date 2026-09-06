@@ -6,42 +6,94 @@ class ApiService {
   // ========== 旧接口：手机号 + 身份证号 ==========
   static const String oldBaseUrl = 'https://www.pinganbaiyun.cn';
 
-  /// 旧接口登录
-  static Future<String> loginOld(String phone, String idCard) async {
+  /// 旧接口登录（按照小程序源码逻辑）
+  static Future<Map<String, String>> loginOld(String phone, String idCard) async {
+    final payload = {
+      'sex': 0,
+      'idcardNo': idCard,
+      'deviceInfo': {
+        'osVersion': '17.0',
+        'wifiMac': '02:00:00:00:00:00',
+        'brand': 'Apple',
+        'os': 0,
+        'udid': '2E382B94-EE0D-4918-9B9D-DDBE42E3E429',
+        'appVersion': '1.3.6',
+        'imsi': '46015',
+        'model': 'iPhone15,3',
+      },
+      'faceUploadCount': 0,
+      'isreal': 0,
+      'age': 0,
+      'appVersion': '1.3.6',
+      'phone': phone,
+    };
+
     final response = await http.post(
       Uri.parse('$oldBaseUrl/baiyunuser/account/login/v1'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phone': phone, 'idCard': idCard}),
+      body: jsonEncode(payload),
     );
+
     if (response.statusCode != 200) {
       throw Exception('登录失败: HTTP ${response.statusCode}');
     }
+
     final data = jsonDecode(response.body);
-    if (data is Map && data['code'] == 200 && data['obj'] != null) {
-      final obj = data['obj'];
-      if (obj is Map && obj['token'] != null) {
-        return obj['token'].toString();
+    if (data is Map && data['state'] == true && data['code'] == '0000') {
+      final token = data['extension']?.toString() ?? '';
+      final loginUser = data['obj'] != null && data['obj'] is Map ? (data['obj']['id']?.toString() ?? '') : '';
+      if (token.isEmpty || loginUser.isEmpty) {
+        throw Exception('登录返回数据缺失');
       }
+      return {'token': token, 'loginUser': loginUser, 'phone': phone};
     }
-    final msg = data is Map ? (data['msg'] ?? data['message'] ?? '登录失败') : '登录失败';
+
+    final msg = data is Map ? (data['msg'] ?? '登录失败') : '登录失败';
     throw Exception(msg.toString());
   }
 
   /// 旧接口获取门禁列表
-  static Future<List<dynamic>> fetchGuardListOld(String token) async {
+  static Future<List<dynamic>> fetchGuardListOld(Map<String, String> auth) async {
     final response = await http.post(
       Uri.parse('$oldBaseUrl/baiyunuser/entranceguard/getList'),
-      headers: {'Content-Type': 'application/json', 'token': token},
-      body: jsonEncode({}),
+      headers: {
+        'Content-Type': 'application/json',
+        'TOKEN': auth['token'] ?? '',
+        'LOGIN_USER': auth['loginUser'] ?? '',
+      },
+      body: jsonEncode({'pageNum': 0, 'pages': 0, 'pageSize': 0}),
     );
+
     if (response.statusCode != 200) {
       throw Exception('获取门禁列表失败: HTTP ${response.statusCode}');
     }
+
     final data = jsonDecode(response.body);
-    if (data is Map && data['code'] == 200 && data['obj'] is List) {
+
+    // 递归查找 data_list
+    final merged = <dynamic>[];
+    void walk(dynamic node) {
+      if (node == null) return;
+      if (node is List) {
+        for (final item in node) walk(item);
+        return;
+      }
+      if (node is Map) {
+        if (node['data_list'] is List) {
+          merged.addAll(node['data_list'] as List);
+        }
+        if (node['obj'] != null) walk(node['obj']);
+      }
+    }
+    walk(data);
+
+    if (merged.isNotEmpty) return merged;
+
+    if (data is Map && data['state'] == true && data['code'] == '0000' && data['obj'] is List) {
       return data['obj'] as List<dynamic>;
     }
-    final msg = data is Map ? (data['msg'] ?? data['message'] ?? '未获取到门禁信息') : '未获取到门禁信息';
+
+    final msg = data is Map ? (data['msg'] ?? '未获取到门禁信息') : '未获取到门禁信息';
     throw Exception(msg.toString());
   }
 
