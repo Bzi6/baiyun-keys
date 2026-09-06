@@ -19,44 +19,23 @@ jobs:
           flutter clean
           flutter pub get
 
-      - name: Regenerate iOS project (with main.dart backup)
+      - name: Regenerate iOS project
         run: |
-          # 备份关键文件
+          # 备份关键文件（防止 flutter create 覆盖）
           cp ios/Runner/Info.plist /tmp/Info.plist.bak
           cp lib/main.dart /tmp/main.dart.bak
-          echo "=== BEFORE: main.dart line count ==="
-          wc -l lib/main.dart
-          echo "=== BEFORE: main.dart content ==="
-          cat lib/main.dart
-
-          # 删除不完整的 ios 目录
+          # 删除不完整的 ios 目录并重新生成
           rm -rf ios
-
-          # 重新生成完整 iOS 工程
           flutter create . --platforms ios --project-name baiyun_keys
-
-          echo "=== AFTER: main.dart line count ==="
-          wc -l lib/main.dart
-          echo "=== AFTER: main.dart content ==="
-          cat lib/main.dart
-
-          # 强制恢复原有 main.dart 和 Info.plist
+          # 恢复原有文件
           cp /tmp/main.dart.bak lib/main.dart
           cp /tmp/Info.plist.bak ios/Runner/Info.plist
-
-          echo "=== RESTORED: main.dart line count ==="
-          wc -l lib/main.dart
-          echo "=== iOS files ==="
-          ls -la ios/
-          ls -la ios/Runner/
 
       - name: Set iOS deployment target to 13.0
         run: |
           cd ios
           if [ -f Podfile ]; then
             sed -i '' "s/platform :ios.*/platform :ios, '13.0'/" Podfile
-            echo "=== Podfile head ==="
-            head -5 Podfile
           fi
 
       - name: pod install
