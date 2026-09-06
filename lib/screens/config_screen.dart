@@ -22,11 +22,17 @@ class _ConfigScreenState extends State<ConfigScreen> {
   late TextEditingController _productKeyController;
   late TextEditingController _unlockKeyController;
 
+  // 旧接口（手机号+身份证）
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _idCardController = TextEditingController();
+  bool _fetchingOld = false;
+
+  // 新接口（高级设置，抓包参数）
   final TextEditingController _openIdController = TextEditingController();
   final TextEditingController _encryptedKeyController = TextEditingController();
   final TextEditingController _macPrefixController = TextEditingController(text: '3E5');
   bool _advancedExpanded = false;
-  bool _fetching = false;
+  bool _fetchingNew = false;
 
   @override
   void initState() {
@@ -42,6 +48,8 @@ class _ConfigScreenState extends State<ConfigScreen> {
   Future<void> _loadAdvancedSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
+      _phoneController.text = prefs.getString('fetchPhone') ?? '';
+      _idCardController.text = prefs.getString('fetchIdCard') ?? '';
       _openIdController.text = prefs.getString('openId') ?? '';
       _encryptedKeyController.text = prefs.getString('encryptedKey') ?? '';
       _macPrefixController.text = prefs.getString('macPrefix') ?? '3E5';
@@ -50,6 +58,8 @@ class _ConfigScreenState extends State<ConfigScreen> {
 
   Future<void> _saveAdvancedSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('fetchPhone', _phoneController.text.trim());
+    await prefs.setString('fetchIdCard', _idCardController.text.trim());
     await prefs.setString('openId', _openIdController.text.trim());
     await prefs.setString('encryptedKey', _encryptedKeyController.text.trim());
     await prefs.setString('macPrefix', _macPrefixController.text.trim());
@@ -62,6 +72,8 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _bluetoothNameController.dispose();
     _productKeyController.dispose();
     _unlockKeyController.dispose();
+    _phoneController.dispose();
+    _idCardController.dispose();
     _openIdController.dispose();
     _encryptedKeyController.dispose();
     _macPrefixController.dispose();
@@ -80,13 +92,61 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
   }
 
-  Future<void> _fetchRemoteConfig() async {
+  // ========== 旧接口：手机号+身份证获取配置 ==========
+  Future<void> _fetchRemoteConfigOld() async {
+    final phone = _phoneController.text.trim();
+    final idCard = _idCardController.text.trim().toUpperCase();
+
+    if (phone.isEmpty || phone.length != 11) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入正确的手机号')));
+      return;
+    }
+    if (idCard.isEmpty || idCard.length < 15) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入正确的身份证号')));
+      return;
+    }
+
+    setState(() => _fetchingOld = true);
+    try {
+      await _saveAdvancedSettings();
+      final token = await ApiService.loginOld(phone, idCard);
+      final list = await ApiService.fetchGuardListOld(token);
+      if (list.isEmpty) throw Exception('未获取到门禁信息（该账号可能没有门禁，或旧接口已停用）');
+
+      final item = list[0];
+      final name = (item['doorName'] ?? item['name'] ?? item['address'] ?? '自动获取门禁').toString().trim();
+      final mac = (item['macNum'] ?? item['mac'] ?? '').toString().trim();
+      final productKey = (item['productKey'] ?? item['key'] ?? '').toString().trim();
+      final bluetoothName = (item['bluetoothName'] ?? '').toString().trim();
+
+      if (mac.isEmpty || productKey.isEmpty) throw Exception('返回的门锁参数不完整');
+
+      setState(() {
+        _doorNameController.text = name;
+        _macController.text = mac.toUpperCase();
+        _bluetoothNameController.text = bluetoothName.isNotEmpty ? bluetoothName.toUpperCase() : LockProtocol.deriveBluetoothNameFromMac(mac);
+        _productKeyController.text = productKey.toUpperCase();
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('成功获取 ${list.length} 个门禁，已填充第一个')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('获取失败: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _fetchingOld = false);
+    }
+  }
+
+  // ========== 新接口：openId+加密key获取配置 ==========
+  Future<void> _fetchRemoteConfigNew() async {
     final openId = _openIdController.text.trim();
     final encryptedKey = _encryptedKeyController.text.trim();
     final macPrefix = _macPrefixController.text.trim();
 
     if (openId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请先展开高级设置，填写 openId')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请先填写 openId')));
       setState(() => _advancedExpanded = true);
       return;
     }
@@ -100,7 +160,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
       return;
     }
 
-    setState(() => _fetching = true);
+    setState(() => _fetchingNew = true);
     try {
       await _saveAdvancedSettings();
       final accessToken = await ApiService.getAccessToken(openId);
@@ -128,7 +188,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('获取失败: $e')));
       }
     } finally {
-      if (mounted) setState(() => _fetching = false);
+      if (mounted) setState(() => _fetchingNew = false);
     }
   }
 
@@ -188,25 +248,13 @@ class _ConfigScreenState extends State<ConfigScreen> {
         continue;
       }
       final nameMatch = RegExp(r'^门禁名称[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
-      if (nameMatch != null) {
-        current['doorName'] = nameMatch.group(1)!.trim();
-        continue;
-      }
+      if (nameMatch != null) { current['doorName'] = nameMatch.group(1)!.trim(); continue; }
       final macMatch = RegExp(r'^MAC[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
-      if (macMatch != null) {
-        current['mac'] = macMatch.group(1)!.trim();
-        continue;
-      }
+      if (macMatch != null) { current['mac'] = macMatch.group(1)!.trim(); continue; }
       final keyMatch = RegExp(r'^Key[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
-      if (keyMatch != null) {
-        current['key'] = keyMatch.group(1)!.trim();
-        continue;
-      }
+      if (keyMatch != null) { current['key'] = keyMatch.group(1)!.trim(); continue; }
       final bluetoothMatch = RegExp(r'^蓝牙名称[：:]\s*(.+)$', caseSensitive: false).firstMatch(line);
-      if (bluetoothMatch != null) {
-        current['bluetoothName'] = bluetoothMatch.group(1)!.trim();
-        continue;
-      }
+      if (bluetoothMatch != null) { current['bluetoothName'] = bluetoothMatch.group(1)!.trim(); continue; }
     }
     pushCurrentIfNeeded();
 
@@ -383,6 +431,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            // 蓝牙门禁参数
             _buildCard(
               title: '蓝牙门禁参数',
               child: Form(
@@ -428,8 +477,50 @@ class _ConfigScreenState extends State<ConfigScreen> {
               ),
             ),
             const SizedBox(height: 16),
+
+            // 自动获取配置（方式一：手机号+身份证，旧接口）
             _buildCard(
-              title: '自动获取配置',
+              title: '自动获取配置（方式一：手机号+身份证）',
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                _buildInput(
+                  controller: _phoneController,
+                  label: '手机号',
+                  hint: '请输入手机号',
+                ),
+                const SizedBox(height: 16),
+                _buildInput(
+                  controller: _idCardController,
+                  label: '身份证号',
+                  hint: '请输入身份证号',
+                ),
+                const SizedBox(height: 16),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: SizedBox(
+                    height: 44,
+                    child: ElevatedButton(
+                      onPressed: _fetchingOld ? null : _fetchRemoteConfigOld,
+                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF14B8A6), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 24)),
+                      child: _fetchingOld ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('获取配置', style: TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: const Color(0xFFFFFBEB), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFFDE68A))),
+                  child: const Text(
+                    '注意：旧接口可能已部分停用，部分账号可能返回空或被拒绝。如果获取失败，请尝试下方方式二（抓包参数）。',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF92400E), height: 1.5),
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 16),
+
+            // 自动获取配置（方式二：抓包参数，新接口）
+            _buildCard(
+              title: '自动获取配置（方式二：抓包参数）',
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Container(
                   decoration: BoxDecoration(color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE2E8F0))),
@@ -476,15 +567,17 @@ class _ConfigScreenState extends State<ConfigScreen> {
                   child: SizedBox(
                     height: 44,
                     child: ElevatedButton(
-                      onPressed: _fetching ? null : _fetchRemoteConfig,
+                      onPressed: _fetchingNew ? null : _fetchRemoteConfigNew,
                       style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF14B8A6), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 24)),
-                      child: _fetching ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('获取配置', style: TextStyle(fontWeight: FontWeight.w600)),
+                      child: _fetchingNew ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('获取配置', style: TextStyle(fontWeight: FontWeight.w600)),
                     ),
                   ),
                 ),
               ]),
             ),
             const SizedBox(height: 16),
+
+            // 备份/恢复
             _buildCard(
               title: '备份/恢复',
               child: Column(children: [
