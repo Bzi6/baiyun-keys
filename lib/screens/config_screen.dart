@@ -415,10 +415,15 @@ class _ConfigScreenState extends State<ConfigScreen> {
         final parts = trimmed.split('：');
         final key = parts[0].trim();
         final value = parts.sublist(1).join('：').trim();
-        if (key.contains('名称') || key == 'doorName') current['doorName'] = value;
-        else if (key.toUpperCase() == 'MAC' || key.contains('MAC')) current['mac'] = value.toUpperCase();
-        else if (key.toUpperCase() == 'KEY' || key.contains('密钥') || key.contains('productKey')) current['productKey'] = value.toUpperCase();
-        else if (key.contains('蓝牙') || key.contains('bluetoothName')) current['bluetoothName'] = value.toUpperCase();
+        if (key.contains('名称') || key == 'doorName') {
+          current['doorName'] = value;
+        } else if (key.toUpperCase() == 'MAC' || key.contains('MAC')) {
+          current['mac'] = value.toUpperCase();
+        } else if (key.toUpperCase() == 'KEY' || key.contains('密钥') || key.contains('productKey')) {
+          current['productKey'] = value.toUpperCase();
+        } else if (key.contains('蓝牙') || key.contains('bluetoothName')) {
+          current['bluetoothName'] = value.toUpperCase();
+        }
       }
     }
     if (current != null && (current['mac']?.toString().isNotEmpty ?? false)) doors.add(current);
@@ -505,15 +510,42 @@ class _ConfigScreenState extends State<ConfigScreen> {
       ]),
       if (_selectorOpen) ...[
         const SizedBox(height: 8),
-        Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: const Color(0xFFF8FBFF), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE6EBF1))), child: Column(children: [
-          ..._locks.asMap().entries.map((e) {
-            final isActive = e.key == _selectedIndex;
-            return GestureDetector(onTap: () => _selectLock(e.key), child: Container(margin: const EdgeInsets.only(bottom: 4), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), decoration: BoxDecoration(color: isActive ? const Color(0xFFEFF6FF) : Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: isActive ? const Color(0xFFBFDBFE) : Colors.transparent)), child: Row(children: [Expanded(child: Text(e.value.doorName, style: TextStyle(fontSize: 14, color: isActive ? const Color(0xFF1D4ED8) : const Color(0xFF6B7280), overflow: TextOverflow.ellipsis))), if (isActive) Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3), decoration: BoxDecoration(color: const Color(0xFF3B82F6), borderRadius: BorderRadius.circular(12)), child: const Text('当前', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)))]))));
-          }),
-          GestureDetector(onTap: _addNewLock, child: Container(margin: const EdgeInsets.only(bottom: 4), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), decoration: BoxDecoration(color: const Color(0xFFF0FDF4), borderRadius: BorderRadius.circular(10), border: Border.all(color: const Color(0xFFBBF7D0), style: BorderStyle.solid)), child: const Row(children: [Icon(Icons.add, size: 18, color: Color(0xFF16A34A)), SizedBox(width: 8), Text('新增门禁', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF16A34A)))]))),
-        ])),
+        Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: const Color(0xFFF8FBFF), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE6EBF1))), child: Column(children: _buildSelectorItems())),
       ],
     ]);
+  }
+
+  List<Widget> _buildSelectorItems() {
+    final items = <Widget>[];
+    for (var i = 0; i < _locks.length; i++) {
+      final isActive = i == _selectedIndex;
+      items.add(GestureDetector(
+        onTap: () => _selectLock(i),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(color: isActive ? const Color(0xFFEFF6FF) : Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: isActive ? const Color(0xFFBFDBFE) : Colors.transparent)),
+          child: Row(children: [
+            Expanded(child: Text(_locks[i].doorName, style: TextStyle(fontSize: 14, color: isActive ? const Color(0xFF1D4ED8) : const Color(0xFF6B7280), overflow: TextOverflow.ellipsis))),
+            if (isActive) Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3), decoration: BoxDecoration(color: const Color(0xFF3B82F6), borderRadius: BorderRadius.circular(12)), child: const Text('当前', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white))),
+          ]),
+        ),
+      ));
+    }
+    items.add(GestureDetector(
+      onTap: _addNewLock,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(color: const Color(0xFFF0FDF4), borderRadius: BorderRadius.circular(10), border: Border.all(color: const Color(0xFFBBF7D0))),
+        child: const Row(children: [
+          Icon(Icons.add, size: 18, color: Color(0xFF16A34A)),
+          SizedBox(width: 8),
+          Text('新增门禁', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF16A34A))),
+        ]),
+      ),
+    ));
+    return items;
   }
 
   Widget _buildTextField(String label, TextEditingController controller, String hint, IconData icon, {String? Function(String?)? validator, TextInputType? keyboardType}) {
