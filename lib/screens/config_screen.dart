@@ -23,7 +23,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
   late TextEditingController _macController;
   late TextEditingController _bluetoothNameController;
   late TextEditingController _productKeyController;
-  late TextEditingController _unlockKeyController;
 
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _idCardController = TextEditingController();
@@ -46,7 +45,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _macController = TextEditingController();
     _bluetoothNameController = TextEditingController();
     _productKeyController = TextEditingController();
-    _unlockKeyController = TextEditingController();
     _loadLocks();
     _loadAdvancedSettings();
   }
@@ -70,7 +68,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
       _macController.clear();
       _bluetoothNameController.clear();
       _productKeyController.clear();
-      _unlockKeyController.clear();
       return;
     }
     final lock = _locks[_selectedIndex];
@@ -78,7 +75,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _macController.text = lock.mac;
     _bluetoothNameController.text = lock.bluetoothName;
     _productKeyController.text = lock.productKey;
-    _unlockKeyController.text = lock.unlockKey ?? '';
   }
 
   Future<void> _saveLocks() async {
@@ -117,7 +113,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
       _macController.clear();
       _bluetoothNameController.clear();
       _productKeyController.clear();
-      _unlockKeyController.clear();
       _selectorOpen = false;
     });
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已创建新门禁，请填写参数')));
@@ -160,7 +155,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
       mac: _macController.text.trim().toUpperCase(),
       bluetoothName: _bluetoothNameController.text.trim().toUpperCase(),
       productKey: _productKeyController.text.trim().toUpperCase(),
-      unlockKey: _unlockKeyController.text.trim().isNotEmpty ? _unlockKeyController.text.trim().toUpperCase() : null,
+      unlockKey: null,
     );
 
     if (_locks.isNotEmpty && _selectedIndex < _locks.length) {
@@ -415,14 +410,15 @@ class _ConfigScreenState extends State<ConfigScreen> {
         final parts = trimmed.split('：');
         final key = parts[0].trim();
         final value = parts.sublist(1).join('：').trim();
-        if (key.contains('名称') || key == 'doorName') {
+        // 注意：蓝牙名称必须优先判断，因为"蓝牙名称"包含"名称"
+        if (key.contains('蓝牙') || key.contains('bluetoothName')) {
+          current['bluetoothName'] = value.toUpperCase();
+        } else if (key.contains('名称') || key == 'doorName') {
           current['doorName'] = value;
         } else if (key.toUpperCase() == 'MAC' || key.contains('MAC')) {
           current['mac'] = value.toUpperCase();
         } else if (key.toUpperCase() == 'KEY' || key.contains('密钥') || key.contains('productKey')) {
           current['productKey'] = value.toUpperCase();
-        } else if (key.contains('蓝牙') || key.contains('bluetoothName')) {
-          current['bluetoothName'] = value.toUpperCase();
         }
       }
     }
@@ -456,7 +452,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
                 _buildTextField('门禁 MAC (macNum)', _macController, '例如：3E:52:EB:90:17:E9', Icons.bluetooth, validator: (v) => v!.isEmpty ? '请输入MAC地址' : null),
                 _buildTextField('蓝牙名称', _bluetoothNameController, '例如：BY2EB9017E9', Icons.devices),
                 _buildTextField('门禁 Key (productKey)', _productKeyController, '例如：e34270efeaf8480d', Icons.vpn_key, validator: (v) => v!.isEmpty ? '请输入产品密钥' : null),
-                _buildTextField('开锁密钥（可选）', _unlockKeyController, '如与产品密钥相同可留空', Icons.key),
               ]),
             ),
             const SizedBox(height: 16),
@@ -562,7 +557,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _macController.dispose();
     _bluetoothNameController.dispose();
     _productKeyController.dispose();
-    _unlockKeyController.dispose();
     _phoneController.dispose();
     _idCardController.dispose();
     _openIdController.dispose();
