@@ -26,6 +26,8 @@ class _ConfigScreenState extends State<ConfigScreen> {
 
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _idCardController = TextEditingController();
+  final TextEditingController _openIdController = TextEditingController();
+  bool _advancedOpen = false;
   bool _fetchingRemote = false;
 
   final TextEditingController _importTextController = TextEditingController();
@@ -40,6 +42,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _bluetoothNameController = TextEditingController();
     _productKeyController = TextEditingController();
     _loadLocks();
+    _loadOpenId();
   }
 
   Future<void> _loadLocks() async {
@@ -53,6 +56,17 @@ class _ConfigScreenState extends State<ConfigScreen> {
         _fillForm();
       });
     }
+  }
+
+  Future<void> _loadOpenId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final openId = prefs.getString('custom_openid') ?? '';
+    setState(() => _openIdController.text = openId);
+  }
+
+  Future<void> _saveOpenId() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('custom_openid', _openIdController.text.trim());
   }
 
   void _fillForm() {
@@ -147,29 +161,31 @@ class _ConfigScreenState extends State<ConfigScreen> {
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('保存成功')));
   }
 
-  // ========== 自动获取配置（新接口优先，只需手机号） ==========
+  // ========== 自动获取配置（新接口优先，支持自定义 openId） ==========
   Future<void> _fetchRemoteConfig() async {
     if (_fetchingRemote) return;
 
     final phone = _phoneController.text.trim();
     final idCard = _idCardController.text.trim().toUpperCase();
+    final customOpenId = _openIdController.text.trim();
 
     if (phone.isEmpty || phone.length != 11) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入正确的手机号')));
       return;
     }
 
+    // 保存自定义 openId
+    await _saveOpenId();
+
     setState(() => _fetchingRemote = true);
 
     try {
       List<Map<String, dynamic>> list = [];
-      bool useNewApi = false;
 
       // 优先使用新接口（只需手机号，全自动）
       try {
-        final result = await ApiService.fetchConfigByPhone(phone);
+        final result = await ApiService.fetchConfigByPhone(phone, customOpenId.isEmpty ? null : customOpenId);
         list = List<Map<String, dynamic>>.from(result['guardList'] ?? []);
-        useNewApi = true;
       } catch (newApiErr) {
         final errMsg = newApiErr.toString();
         // 如果是手机号相关错误，直接提示，不回退旧接口
@@ -197,7 +213,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
           final bluetoothName = (item['bluetoothName'] ?? '').toString().trim();
           final productKey = (item['productKey'] ?? item['key'] ?? '').toString().trim();
 
-          // 从 bluetoothName 推导 MAC（前缀3E5）
           String mac = (item['macNum'] ?? item['mac'] ?? '').toString().trim();
           if (mac.isEmpty && bluetoothName.isNotEmpty) {
             mac = ApiService.deriveMacFromBluetoothName(bluetoothName, '3E5');
@@ -213,7 +228,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
             unlockKey: null,
           );
 
-          // 检查是否已存在
           final exists = _locks.any((e) => e.mac == config.mac && e.productKey == config.productKey);
           if (!exists) {
             setState(() => _locks.add(config));
@@ -227,14 +241,12 @@ class _ConfigScreenState extends State<ConfigScreen> {
       await _saveLocks();
 
       if (imported > 0) {
-        // 选中第一个新导入的门禁
         setState(() {
           _selectedIndex = _locks.length - imported;
           _fillForm();
         });
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('获取成功！新增 $imported 个门禁，已自动选中')));
       } else {
-        // 选中第一个
         if (_locks.isNotEmpty) {
           setState(() {
             _selectedIndex = 0;
@@ -418,7 +430,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
         final parts = trimmed.split('：');
         final key = parts[0].trim();
         final value = parts.sublist(1).join('：').trim();
-        // 蓝牙名称优先判断
         if (key.contains('蓝牙') || key.contains('bluetoothName')) {
           current['bluetoothName'] = value.toUpperCase();
         } else if (key.contains('名称') || key == 'doorName') {
@@ -479,6 +490,26 @@ class _ConfigScreenState extends State<ConfigScreen> {
             const SizedBox(height: 12),
             _buildTextField('手机号', _phoneController, '请输入手机号', Icons.phone, keyboardType: TextInputType.phone),
             _buildTextField('身份证号（可选，旧接口用）', _idCardController, '请输入身份证号', Icons.credit_card),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () => setState(() => _advancedOpen = !_advancedOpen),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(10), border: Border.all(color: const Color(0xFFE6EBF1))),
+                child: Row(children: [
+                  const Icon(Icons.settings, size: 18, color: Color(0xFF7B8796)),
+                  const SizedBox(width: 8),
+                  const Expanded(child: Text('高级设置（自定义 openId）', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF253041)))),
+                  Icon(_advancedOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, size: 20, color: const Color(0xFF9AA5B3)),
+                ]),
+              ),
+            ),
+            if (_advancedOpen) ...[
+              const SizedBox(height: 12),
+              _buildTextField('openId（默认失效时填写）', _openIdController, '例如：o7fwU0bbq8M3IrfJMxIy2XwefFZM', Icons.person),
+              const SizedBox(height: 8),
+              const Text('获取方法：用 Stream 抓包"平安白云"小程序，找到 check_state 请求，请求体里的 openId 就是', style: TextStyle(fontSize: 11, color: Colors.grey)),
+            ],
             const SizedBox(height: 12),
             SizedBox(width: double.infinity, child: ElevatedButton.icon(onPressed: _fetchingRemote ? null : _fetchRemoteConfig, icon: _fetchingRemote ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.cloud_download, size: 18), label: Text(_fetchingRemote ? '获取中...' : '获取配置'), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))))),
           ])),
@@ -555,6 +586,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _productKeyController.dispose();
     _phoneController.dispose();
     _idCardController.dispose();
+    _openIdController.dispose();
     _importTextController.dispose();
     super.dispose();
   }
