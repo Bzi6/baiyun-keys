@@ -17,7 +17,6 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
   bool _selectorOpen = false;
   bool _paramsHidden = false;
-  bool _logEnabled = false;
   final BleService _bleService = BleService();
   String _log = '';
   bool _isUnlocking = false;
@@ -28,25 +27,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadLocks();
-    _loadLogPreference();
     _bleService.logStream.listen((msg) {
-      if (mounted && _logEnabled) {
+      if (mounted) {
         setState(() => _log = '$_log\n$msg');
       }
-    });
-  }
-
-  Future<void> _loadLogPreference() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() => _logEnabled = prefs.getBool('logEnabled') ?? false);
-  }
-
-  Future<void> _toggleLog(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('logEnabled', value);
-    setState(() {
-      _logEnabled = value;
-      if (!value) _log = '';
     });
   }
 
@@ -176,10 +160,6 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('包子的key', style: TextStyle(color: Color(0xFF111827), fontWeight: FontWeight.bold, fontSize: 18)),
         backgroundColor: Colors.white,
         elevation: 0,
-        actions: [
-          Switch(value: _logEnabled, onChanged: _toggleLog, activeColor: const Color(0xFF2563EB)),
-          const SizedBox(width: 8),
-        ],
       ),
       body: Container(
         decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFFEDF2FB), Color(0xFFF8FAFC)])),
@@ -268,40 +248,38 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ])),
             if (_statusMessage.isNotEmpty) ...[const SizedBox(height: 12), _buildStatusCard()],
-            if (_logEnabled) ...[
+            const SizedBox(height: 12),
+            _buildCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const Icon(Icons.article, size: 16, color: Color(0xFF7B8796)),
+                const SizedBox(width: 6),
+                const Text('调试日志', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF111827))),
+                const Spacer(),
+                Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: const Color(0xFFF7F9FC), borderRadius: BorderRadius.circular(20), border: Border.all(color: const Color(0xFFE5EDF6))), child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Container(width: 6, height: 6, decoration: BoxDecoration(color: _isUnlocking ? const Color(0xFF2563EB) : const Color(0xFF8793A3), borderRadius: BorderRadius.circular(3))),
+                  const SizedBox(width: 4),
+                  Text(_isUnlocking ? '运行中' : '等待日志', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF7B8796))),
+                ])),
+              ]),
               const SizedBox(height: 12),
-              _buildCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  const Icon(Icons.article, size: 16, color: Color(0xFF7B8796)),
-                  const SizedBox(width: 6),
-                  const Text('调试日志', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF111827))),
-                  const Spacer(),
-                  Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: const Color(0xFFF7F9FC), borderRadius: BorderRadius.circular(20), border: Border.all(color: const Color(0xFFE5EDF6))), child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Container(width: 6, height: 6, decoration: BoxDecoration(color: _isUnlocking ? const Color(0xFF2563EB) : const Color(0xFF8793A3), borderRadius: BorderRadius.circular(3))),
-                    const SizedBox(width: 4),
-                    Text(_isUnlocking ? '运行中' : '等待日志', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF7B8796))),
-                  ])),
-                ]),
-                const SizedBox(height: 12),
-                Container(
-                  height: 160, width: double.infinity, padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: const Color(0xFF0A1728), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFF14243A))),
-                  child: SingleChildScrollView(child: Text(_log.isEmpty ? '暂无日志，点击「立即开锁」开始调试' : _log, style: const TextStyle(color: Color(0xFF65D98D), fontSize: 11, fontFamily: 'monospace', height: 1.6))),
+              Container(
+                height: 160, width: double.infinity, padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: const Color(0xFF0A1728), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFF14243A))),
+                child: SingleChildScrollView(child: Text(_log.isEmpty ? '暂无日志，点击「立即开锁」开始调试' : _log, style: const TextStyle(color: Color(0xFF65D98D), fontSize: 11, fontFamily: 'monospace', height: 1.6))),
+              ),
+              const SizedBox(height: 12),
+              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                TextButton(onPressed: () => setState(() => _log = ''), child: const Text('清空日志', style: TextStyle(fontSize: 13, color: Color(0xFF1F6FFF)))),
+                const SizedBox(width: 40),
+                TextButton(
+                  onPressed: () async {
+                    await svc.Clipboard.setData(svc.ClipboardData(text: _log));
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('日志已复制')));
+                  },
+                  child: const Text('复制日志', style: TextStyle(fontSize: 13, color: Color(0xFF00866B))),
                 ),
-                const SizedBox(height: 12),
-                Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  TextButton(onPressed: () => setState(() => _log = ''), child: const Text('清空日志', style: TextStyle(fontSize: 13, color: Color(0xFF1F6FFF)))),
-                  const SizedBox(width: 40),
-                  TextButton(
-                    onPressed: () async {
-                      await svc.Clipboard.setData(svc.ClipboardData(text: _log));
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('日志已复制')));
-                    },
-                    child: const Text('复制日志', style: TextStyle(fontSize: 13, color: Color(0xFF00866B))),
-                  ),
-                ]),
-              ])),
-            ],
+              ]),
+            ])),
             const SizedBox(height: 80),
           ],
         ),
