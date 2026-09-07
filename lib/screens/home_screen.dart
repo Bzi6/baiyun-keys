@@ -4,7 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/lock_config.dart';
 import '../services/ble_service.dart';
 import 'config_screen.dart';
-import 'help_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,7 +20,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isUnlocking = false;
   bool _isCancelled = false;
   String _statusText = '';
-  String _statusType = 'idle'; // idle, unlocking, success, error, cancelled
+  String _statusType = 'idle';
 
   @override
   void initState() {
@@ -132,8 +131,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onItemTapped(int index) {
     if (index == 1) {
       Navigator.push(context, MaterialPageRoute(builder: (context) => const ConfigScreen()));
-    } else if (index == 2) {
-      Navigator.push(context, MaterialPageRoute(builder: (context) => const HelpScreen()));
     }
   }
 
@@ -160,7 +157,6 @@ class _HomeScreenState extends State<HomeScreen> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: '首页'),
           BottomNavigationBarItem(icon: Icon(Icons.code), label: '配置'),
-          BottomNavigationBarItem(icon: Icon(Icons.energy_savings_leaf), label: '帮助'),
         ],
         currentIndex: 0,
         selectedItemColor: const Color(0xFF10B981),
