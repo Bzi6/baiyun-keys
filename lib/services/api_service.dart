@@ -73,13 +73,13 @@ class ApiService {
 
   // ========== 新接口（只需手机号，全自动） ==========
 
-  static Future<String> getAccessToken([String? openId]) async {
+  static Future<String> getAccessToken([String? customOpenId]) async {
     final now = DateTime.now();
     if (_cachedAccessToken != null && _tokenExpireTime != null && now.isBefore(_tokenExpireTime!)) {
       return _cachedAccessToken!;
     }
 
-    final id = openId ?? _defaultOpenId;
+    final id = customOpenId ?? _defaultOpenId;
     final response = await http.post(
       Uri.parse('$_newBaseUrl/mini_program/api_01/check_state'),
       headers: {'Content-Type': 'application/json'},
@@ -152,8 +152,8 @@ class ApiService {
     throw Exception('get_guard_list_by_phone 返回数据格式异常');
   }
 
-  static Future<Map<String, dynamic>> fetchConfigByPhone(String phone) async {
-    final accessToken = await getAccessToken();
+  static Future<Map<String, dynamic>> fetchConfigByPhone(String phone, [String? customOpenId]) async {
+    final accessToken = await getAccessToken(customOpenId);
     final rsaPublicKey = await getRsaPublicKey(accessToken);
     final guardList = await getGuardListByPhone(phone, accessToken, rsaPublicKey);
     return {
@@ -198,32 +198,27 @@ class ApiService {
     final der = _base64Decode(b64);
     var offset = 0;
 
-    // 外层 SEQUENCE
     if (der[offset] != 0x30) throw Exception('Invalid public key: expected SEQUENCE');
     offset++;
     final len1 = _readLength(der, offset);
     offset = len1['offset'] as int;
 
-    // AlgorithmIdentifier SEQUENCE
     if (der[offset] != 0x30) throw Exception('Invalid public key: expected AlgorithmIdentifier');
     offset++;
     final algLen = _readLength(der, offset);
     offset = (algLen['offset'] as int) + (algLen['length'] as int);
 
-    // subjectPublicKey BIT STRING
     if (der[offset] != 0x03) throw Exception('Invalid public key: expected BIT STRING');
     offset++;
     final bitStrLen = _readLength(der, offset);
     offset = bitStrLen['offset'] as int;
-    offset++; // unusedBits
+    offset++;
 
-    // RSAPublicKey SEQUENCE
     if (der[offset] != 0x30) throw Exception('Invalid public key: expected RSAPublicKey SEQUENCE');
     offset++;
     final rsaLen = _readLength(der, offset);
     offset = rsaLen['offset'] as int;
 
-    // modulus (n)
     if (der[offset] != 0x02) throw Exception('Invalid public key: expected modulus INTEGER');
     offset++;
     final nLen = _readLength(der, offset);
@@ -232,7 +227,6 @@ class ApiService {
     offset += nLen['length'] as int;
     final n = _bytesToBigInt(nBytes);
 
-    // publicExponent (e)
     if (der[offset] != 0x02) throw Exception('Invalid public key: expected exponent INTEGER');
     offset++;
     final eLen = _readLength(der, offset);
