@@ -34,6 +34,13 @@ class _ConfigScreenState extends State<ConfigScreen> {
   bool _advancedOpen = false;
   bool _fetchingNew = false;
 
+  // 备份选择
+  List<Map<String, dynamic>> _backupItems = [];
+  List<bool> _backupChecked = [];
+
+  // 导入输入
+  final TextEditingController _importTextController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -157,50 +164,143 @@ class _ConfigScreenState extends State<ConfigScreen> {
   }
 
   // ========== 备份与恢复（按小程序源码逻辑） ==========
-  Future<void> _backupToClipboard() async {
+  String _buildCopyPayload(Map<String, dynamic> config) {
+    final name = (config['doorName'] ?? '').toString().trim();
+    final mac = (config['mac'] ?? '').toString().trim();
+    final key = (config['productKey'] ?? '').toString().trim();
+    final bluetoothName = (config['bluetoothName'] ?? '').toString().trim();
+    final lines = ['门禁名称：${name.isEmpty ? '未命名' : name}', 'MAC：${mac.isEmpty ? '缺失' : mac}', 'Key：${key.isEmpty ? '缺失' : key}'];
+    if (bluetoothName.isNotEmpty) lines.add('蓝牙名称：$bluetoothName');
+    return lines.join('\n');
+  }
+
+  String _buildCopyPayloadList(List<Map<String, dynamic>> configs) {
+    if (configs.isEmpty) return '';
+    if (configs.length == 1) return _buildCopyPayload(configs[0]);
+    return configs.asMap().entries.map((e) => '【门禁 ${e.key + 1}】\n${_buildCopyPayload(e.value)}').join('\n\n');
+  }
+
+  Future<void> _showBackupDialog() async {
     final prefs = await SharedPreferences.getInstance();
     final locksJson = prefs.getString('locks');
     if (locksJson == null || locksJson.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('暂无门禁配置可备份')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('暂无可复制门禁，请先保存配置')));
       return;
     }
     final List<dynamic> list = jsonDecode(locksJson);
     if (list.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('暂无门禁配置可备份')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('暂无可复制门禁，请先保存配置')));
       return;
     }
 
-    final buffer = StringBuffer();
-    for (var i = 0; i < list.length; i++) {
-      final item = list[i] as Map<String, dynamic>;
-      if (i > 0) buffer.write('\n');
-      buffer.write('【门禁 ${i + 1}】\n');
-      buffer.write('门禁名称：${item['doorName'] ?? ''}\n');
-      buffer.write('MAC：${item['mac'] ?? ''}\n');
-      buffer.write('Key：${item['productKey'] ?? ''}\n');
-      if ((item['bluetoothName'] ?? '').toString().isNotEmpty) {
-        buffer.write('蓝牙名称：${item['bluetoothName']}\n');
-      }
-    }
+    _backupItems = list.map((e) => e as Map<String, dynamic>).toList();
+    _backupChecked = List<bool>.filled(_backupItems.length, true);
 
-    await Clipboard.setData(ClipboardData(text: buffer.toString()));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已复制 ${list.length} 个门禁配置到剪贴板')));
-    }
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('选择要备份的门禁'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextButton(
+                onPressed: () {
+                  final allChecked = _backupChecked.every((e) => e);
+                  setDialogState(() => _backupChecked = List<bool>.filled(_backupItems.length, !allChecked));
+                },
+                child: Text(_backupChecked.every((e) => e) ? '取消全选' : '全选'),
+              ),
+              const Divider(height: 1),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _backupItems.length,
+                  itemBuilder: (context, index) {
+                    final item = _backupItems[index];
+                    return CheckboxListTile(
+                      title: Text(item['doorName']?.toString() ?? '门禁 ${index + 1}', style: const TextStyle(fontSize: 14)),
+                      subtitle: Text(item['mac']?.toString() ?? '', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                      value: _backupChecked[index],
+                      onChanged: (value) => setDialogState(() => _backupChecked[index] = value ?? false),
+                      controlAffinity: ListTileControlAffinity.leading,
+                    );
+                  },
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+            ElevatedButton(
+              onPressed: () async {
+                final selected = <Map<String, dynamic>>[];
+                for (var i = 0; i < _backupItems.length; i++) {
+                  if (_backupChecked[i]) selected.add(_backupItems[i]);
+                }
+                if (selected.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请先勾选门禁')));
+                  return;
+                }
+                final copyText = _buildCopyPayloadList(selected);
+                await Clipboard.setData(ClipboardData(text: copyText));
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已复制 ${selected.length} 套门禁到剪贴板')));
+              },
+              child: const Text('复制'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
-  Future<void> _restoreFromClipboard() async {
-    final data = await Clipboard.getData('text/plain');
-    final text = data?.text ?? '';
-    if (text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('剪贴板为空，请先复制备份内容')));
-      return;
-    }
+  Future<void> _showImportDialog() async {
+    _importTextController.text = '';
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('粘贴备份内容'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('将之前复制的备份内容粘贴到下方：', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _importTextController,
+              maxLines: 8,
+              decoration: const InputDecoration(
+                hintText: '门禁名称：xxx\nMAC：xxx\nKey：xxx',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+          ElevatedButton(
+            onPressed: () async {
+              final text = _importTextController.text.trim();
+              if (text.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请粘贴备份内容')));
+                return;
+              }
+              Navigator.pop(context);
+              await _doImport(text);
+            },
+            child: const Text('导入'),
+          ),
+        ],
+      ),
+    );
+  }
 
+  Future<void> _doImport(String text) async {
     try {
       final doors = _parseBackupDoors(text);
       if (doors.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未解析到有效的门禁配置')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未识别到有效的门禁配置')));
         return;
       }
 
@@ -209,23 +309,40 @@ class _ConfigScreenState extends State<ConfigScreen> {
       List<dynamic> existing = existingJson != null ? jsonDecode(existingJson) : [];
 
       int added = 0;
+      int skipped = 0;
       for (final door in doors) {
         final mac = door['mac']?.toString() ?? '';
         final exists = existing.any((e) => (e['mac']?.toString() ?? '') == mac && mac.isNotEmpty);
         if (!exists) {
           existing.add(door);
           added++;
+        } else {
+          skipped++;
         }
       }
 
       await prefs.setString('locks', jsonEncode(existing));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('恢复成功：新增 $added 个门禁（跳过 ${doors.length - added} 个重复）')));
+
+      // 显示导入结果
+      final lines = ['成功导入 $added 套门禁'];
+      if (skipped > 0) lines.add('已跳过重复：$skipped 套');
+      for (var i = 0; i < doors.length && i < 5; i++) {
+        lines.add('【门禁 ${i + 1}】${doors[i]['doorName'] ?? '未命名'}');
       }
+      if (doors.length > 5) lines.add('...共 ${doors.length} 套');
+
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('导入结果'),
+          content: Text(lines.join('\n'), style: const TextStyle(fontSize: 13, height: 1.5)),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('确定')),
+          ],
+        ),
+      );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('恢复失败: $e')));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('导入失败: $e')));
     }
   }
 
@@ -238,8 +355,8 @@ class _ConfigScreenState extends State<ConfigScreen> {
       final trimmed = line.trim();
       if (trimmed.isEmpty) continue;
 
-      if (trimmed.startsWith('【门禁')) {
-        if (current != null && current['mac']?.toString().isNotEmpty == true) {
+      if (RegExp(r'^【门禁\s*\d+】$').hasMatch(trimmed)) {
+        if (current != null && (current['mac']?.toString().isNotEmpty ?? false)) {
           doors.add(current);
         }
         current = {};
@@ -265,7 +382,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
       }
     }
 
-    if (current != null && current['mac']?.toString().isNotEmpty == true) {
+    if (current != null && (current['mac']?.toString().isNotEmpty ?? false)) {
       doors.add(current);
     }
 
@@ -315,9 +432,9 @@ class _ConfigScreenState extends State<ConfigScreen> {
                 _buildTextField('开锁密钥（可选）', _unlockKeyController, '如与产品密钥相同可留空', Icons.key),
                 const SizedBox(height: 16),
                 Row(children: [
-                  Expanded(child: OutlinedButton.icon(onPressed: _backupToClipboard, icon: const Icon(Icons.copy, size: 18), label: const Text('一键复制'), style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF2563EB), side: const BorderSide(color: Color(0xFFC8DCFF)), padding: const EdgeInsets.symmetric(vertical: 12)))),
+                  Expanded(child: OutlinedButton.icon(onPressed: _showBackupDialog, icon: const Icon(Icons.copy, size: 18), label: const Text('一键复制'), style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF2563EB), side: const BorderSide(color: Color(0xFFC8DCFF)), padding: const EdgeInsets.symmetric(vertical: 12)))),
                   const SizedBox(width: 12),
-                  Expanded(child: OutlinedButton.icon(onPressed: _restoreFromClipboard, icon: const Icon(Icons.paste, size: 18), label: const Text('一键导入'), style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF10B981), side: const BorderSide(color: Color(0xFFBCEFD4)), padding: const EdgeInsets.symmetric(vertical: 12)))),
+                  Expanded(child: OutlinedButton.icon(onPressed: _showImportDialog, icon: const Icon(Icons.paste, size: 18), label: const Text('一键导入'), style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF10B981), side: const BorderSide(color: Color(0xFFBCEFD4)), padding: const EdgeInsets.symmetric(vertical: 12)))),
                 ]),
                 const SizedBox(height: 12),
                 SizedBox(width: double.infinity, child: ElevatedButton.icon(onPressed: _saveConfig, icon: const Icon(Icons.save, size: 18), label: const Text('保存配置'), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2563EB), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))))),
@@ -423,6 +540,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _openIdController.dispose();
     _encryptedKeyController.dispose();
     _macPrefixController.dispose();
+    _importTextController.dispose();
     super.dispose();
   }
 }
