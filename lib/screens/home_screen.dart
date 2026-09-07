@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/lock_config.dart';
 import '../services/ble_service.dart';
-import 'config_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -128,12 +127,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _bleService.disconnect();
   }
 
-  void _onItemTapped(int index) {
-    if (index == 1) {
-      Navigator.push(context, MaterialPageRoute(builder: (context) => const ConfigScreen()));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final lock = _currentLock;
@@ -144,6 +137,7 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         centerTitle: true,
+        automaticallyImplyLeading: false,
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -152,18 +146,6 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 12),
           if (_statusText.isNotEmpty) _buildStatusBar(),
         ]),
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: '首页'),
-          BottomNavigationBarItem(icon: Icon(Icons.code), label: '配置'),
-        ],
-        currentIndex: 0,
-        selectedItemColor: const Color(0xFF10B981),
-        unselectedItemColor: const Color(0xFF9CA3AF),
-        showUnselectedLabels: true,
-        type: BottomNavigationBarType.fixed,
-        onTap: _onItemTapped,
       ),
     );
   }
@@ -208,21 +190,45 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildDoorSelector(LockConfig? lock) {
-    return GestureDetector(
-      onTap: () => setState(() => _selectorOpen = !_selectorOpen),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(12)),
-        child: Row(children: [
-          Container(width: 36, height: 36, decoration: BoxDecoration(color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.location_on, size: 20, color: Color(0xFF10B981))),
-          const SizedBox(width: 12),
-          Expanded(child: Text(lock?.doorName ?? '请先添加门禁', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: lock == null ? const Color(0xFF9CA3AF) : const Color(0xFF111827), overflow: TextOverflow.ellipsis))),
-          Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: const Color(0xFFDBEAFE), borderRadius: BorderRadius.circular(12)), child: const Text('BLE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF3B82F6)))),
-          const SizedBox(width: 8),
-          Icon(_selectorOpen ? Icons.keyboard_arrow_down : Icons.chevron_right, size: 22, color: const Color(0xFF9CA3AF)),
-        ]),
+    return Column(children: [
+      GestureDetector(
+        onTap: () => setState(() => _selectorOpen = !_selectorOpen),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(12)),
+          child: Row(children: [
+            Container(width: 36, height: 36, decoration: BoxDecoration(color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.location_on, size: 20, color: Color(0xFF10B981))),
+            const SizedBox(width: 12),
+            Expanded(child: Text(lock?.doorName ?? '请先添加门禁', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: lock == null ? const Color(0xFF9CA3AF) : const Color(0xFF111827), overflow: TextOverflow.ellipsis))),
+            Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: const Color(0xFFDBEAFE), borderRadius: BorderRadius.circular(12)), child: const Text('BLE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF3B82F6)))),
+            const SizedBox(width: 8),
+            Icon(_selectorOpen ? Icons.keyboard_arrow_down : Icons.chevron_right, size: 22, color: const Color(0xFF9CA3AF)),
+          ]),
+        ),
       ),
-    );
+      if (_selectorOpen && _locks.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(color: const Color(0xFFF8FBFF), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE6EBF1))),
+          child: Column(children: _locks.asMap().entries.map((e) {
+            final isActive = e.key == _selectedIndex;
+            return GestureDetector(
+              onTap: () => setState(() { _selectedIndex = e.key; _selectorOpen = false; }),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(color: isActive ? const Color(0xFFEFF6FF) : Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: isActive ? const Color(0xFFBFDBFE) : Colors.transparent)),
+                child: Row(children: [
+                  Expanded(child: Text(e.value.doorName, style: TextStyle(fontSize: 14, color: isActive ? const Color(0xFF1D4ED8) : const Color(0xFF6B7280), overflow: TextOverflow.ellipsis))),
+                  if (isActive) Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3), decoration: BoxDecoration(color: const Color(0xFF10B981), borderRadius: BorderRadius.circular(12)), child: const Text('当前', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white))),
+                ]),
+              ),
+            );
+          }).toList()),
+        ),
+      ],
+    ]);
   }
 
   Widget _buildParamsSection(LockConfig? lock) {
