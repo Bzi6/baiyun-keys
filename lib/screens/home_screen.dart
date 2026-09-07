@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' as svc;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/lock_config.dart';
 import '../services/ble_service.dart';
 import 'config_screen.dart';
+import 'help_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,20 +18,15 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _selectorOpen = false;
   bool _paramsHidden = false;
   final BleService _bleService = BleService();
-  String _log = '';
   bool _isUnlocking = false;
-  String _statusMessage = '';
-  String _statusTone = 'normal';
+  bool _isCancelled = false;
+  String _statusText = '';
+  String _statusType = 'idle'; // idle, unlocking, success, error, cancelled
 
   @override
   void initState() {
     super.initState();
     _loadLocks();
-    _bleService.logStream.listen((msg) {
-      if (mounted) {
-        setState(() => _log = '$_log\n$msg');
-      }
-    });
   }
 
   Future<void> _loadLocks() async {
@@ -44,12 +39,6 @@ class _HomeScreenState extends State<HomeScreen> {
         if (_selectedIndex >= _locks.length) _selectedIndex = 0;
       });
     }
-  }
-
-  Future<void> _saveLocks() async {
-    final prefs = await SharedPreferences.getInstance();
-    final list = _locks.map((e) => e.toJson()).toList();
-    await prefs.setString('locks', jsonEncode(list));
   }
 
   LockConfig? get _currentLock {
@@ -72,254 +61,251 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _unlock() async {
     final lock = _currentLock;
     if (lock == null) return;
+
     setState(() {
       _isUnlocking = true;
-      _log = '';
-      _statusMessage = '正在连接和握手，请保持手机靠近门锁';
-      _statusTone = 'active';
+      _isCancelled = false;
+      _statusText = '开锁中';
+      _statusType = 'unlocking';
     });
+
     try {
       final connected = await _bleService.connectToDevice(lock);
+      if (_isCancelled) {
+        await _bleService.disconnect();
+        setState(() {
+          _isUnlocking = false;
+          _statusText = '已中断';
+          _statusType = 'cancelled';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已中断当前开锁流程'), duration: Duration(seconds: 2)));
+        return;
+      }
       if (connected) {
         final result = await _bleService.unlock(lock);
+        if (_isCancelled) {
+          await _bleService.disconnect();
+          setState(() {
+            _isUnlocking = false;
+            _statusText = '已中断';
+            _statusType = 'cancelled';
+          });
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已中断当前开锁流程'), duration: Duration(seconds: 2)));
+          return;
+        }
         setState(() {
-          _statusMessage = result;
-          _statusTone = result.contains('成功') || result.contains('开启') ? 'normal' : 'error';
+          _isUnlocking = false;
+          _statusText = result.contains('成功') || result.contains('开启') ? '开锁成功' : result;
+          _statusType = result.contains('成功') || result.contains('开启') ? 'success' : 'error';
         });
       } else {
         setState(() {
-          _statusMessage = '连接失败，请确认设备已开启且在附近';
-          _statusTone = 'error';
+          _isUnlocking = false;
+          _statusText = '连接失败';
+          _statusType = 'error';
         });
       }
     } catch (e) {
-      setState(() {
-        _statusMessage = '开锁失败: $e';
-        _statusTone = 'error';
-      });
+      if (_isCancelled) {
+        setState(() {
+          _isUnlocking = false;
+          _statusText = '已中断';
+          _statusType = 'cancelled';
+        });
+      } else {
+        setState(() {
+          _isUnlocking = false;
+          _statusText = '开锁失败';
+          _statusType = 'error';
+        });
+      }
     } finally {
       await _bleService.disconnect();
-      if (mounted) setState(() => _isUnlocking = false);
     }
   }
 
-  void _addLock() async {
-    final result = await Navigator.push(context, MaterialPageRoute(builder: (context) => const ConfigScreen()));
-    if (result != null && result is LockConfig) {
-      setState(() {
-        _locks.add(result);
-        _selectedIndex = _locks.length - 1;
-      });
-      _saveLocks();
-    }
+  void _cancelUnlock() {
+    setState(() => _isCancelled = true);
+    _bleService.disconnect();
   }
 
-  void _editLock() async {
-    final lock = _currentLock;
-    if (lock == null) return;
-    final result = await Navigator.push(context, MaterialPageRoute(builder: (context) => ConfigScreen(config: lock)));
-    if (result != null && result is LockConfig) {
-      setState(() => _locks[_selectedIndex] = result);
-      _saveLocks();
+  void _onItemTapped(int index) {
+    if (index == 1) {
+      Navigator.push(context, MaterialPageRoute(builder: (context) => const ConfigScreen()));
+    } else if (index == 2) {
+      Navigator.push(context, MaterialPageRoute(builder: (context) => const HelpScreen()));
     }
-  }
-
-  void _deleteLock() {
-    final lock = _currentLock;
-    if (lock == null) return;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除门禁'),
-        content: Text('确定要删除「${lock.doorName}」吗？'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                _locks.removeAt(_selectedIndex);
-                if (_selectedIndex >= _locks.length) _selectedIndex = 0;
-              });
-              _saveLocks();
-              Navigator.pop(context);
-            },
-            child: const Text('删除', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     final lock = _currentLock;
-    final canSubmit = lock != null;
     return Scaffold(
-      backgroundColor: const Color(0xFFEDF2FB),
+      backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
         title: const Text('包子的key', style: TextStyle(color: Color(0xFF111827), fontWeight: FontWeight.bold, fontSize: 18)),
         backgroundColor: Colors.white,
         elevation: 0,
+        centerTitle: true,
       ),
-      body: Container(
-        decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFFEDF2FB), Color(0xFFF8FAFC)])),
-        child: ListView(
-          padding: const EdgeInsets.all(14),
-          children: [
-            _buildCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('蓝牙门禁', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF111827))),
-              const SizedBox(height: 14),
-              GestureDetector(
-                onTap: () => setState(() => _selectorOpen = !_selectorOpen),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  decoration: BoxDecoration(color: const Color(0xFFFBFDFF), borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFFE6EBF1))),
-                  child: Row(children: [
-                    Container(width: 36, height: 36, decoration: BoxDecoration(color: const Color(0xFFE9FBF2), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.location_on, size: 18, color: Color(0xFF12B981))),
-                    const SizedBox(width: 10),
-                    Expanded(child: Text(lock?.doorName ?? '请先添加门禁', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: lock == null ? const Color(0xFF9AA5B3) : const Color(0xFF111827), overflow: TextOverflow.ellipsis))),
-                    Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: const Color(0xFFEAF2FF), borderRadius: BorderRadius.circular(20)), child: const Text('BLE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF2563EB)))),
-                    const SizedBox(width: 6),
-                    Icon(_selectorOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, size: 20, color: const Color(0xFF9AA5B3)),
-                  ]),
-                ),
-              ),
-              if (_selectorOpen && _locks.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(color: const Color(0xFFF8FBFF), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE6EBF1))),
-                  child: Column(children: _locks.asMap().entries.map((e) {
-                    final isActive = e.key == _selectedIndex;
-                    return GestureDetector(
-                      onTap: () => setState(() { _selectedIndex = e.key; _selectorOpen = false; }),
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 4),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        decoration: BoxDecoration(color: isActive ? const Color(0xFFF0F7FF) : Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: isActive ? const Color(0xFFC8DCFF) : Colors.transparent)),
-                        child: Row(children: [
-                          Expanded(child: Text(e.value.doorName, style: TextStyle(fontSize: 13, color: isActive ? const Color(0xFF253041) : const Color(0xFF7B8796), overflow: TextOverflow.ellipsis))),
-                          if (isActive) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: const Color(0xFFE9FBF2), borderRadius: BorderRadius.circular(20)), child: const Text('当前', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF0E9F6E)))),
-                        ]),
-                      ),
-                    );
-                  }).toList()),
-                ),
-              ],
-              const SizedBox(height: 14),
-              Container(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
-                decoration: BoxDecoration(color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE6EBF1))),
-                child: Column(children: [
-                  Row(children: [
-                    const Text('门禁信息', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF9AA5B3))),
-                    const Spacer(),
-                    GestureDetector(onTap: () => setState(() => _paramsHidden = !_paramsHidden), child: Icon(_paramsHidden ? Icons.visibility_off : Icons.visibility, size: 18, color: const Color(0xFF9AA5B3))),
-                  ]),
-                  const SizedBox(height: 8),
-                  _buildParamItem('门禁 MAC', _paramsHidden ? _maskedMac : (lock?.mac ?? '—')),
-                  _buildParamItem('门禁 Key', _paramsHidden ? _maskedKey : (lock?.productKey ?? '—')),
-                ]),
-              ),
-              const SizedBox(height: 18),
-              Center(
-                child: SizedBox(
-                  width: 220, height: 50,
-                  child: ElevatedButton(
-                    onPressed: (!canSubmit || _isUnlocking) ? null : _unlock,
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)), elevation: 0),
-                    child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                      if (_isUnlocking) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      else const Icon(Icons.lock_open, size: 18),
-                      const SizedBox(width: 8),
-                      Text(_isUnlocking ? '执行中...' : '立即开锁', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-                    ]),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(canSubmit ? (_isUnlocking ? '正在连接和握手，请保持手机靠近门锁' : '靠近门锁后点击按钮即可尝试开锁') : '请先前往配置页补全门禁参数', style: const TextStyle(fontSize: 12, color: Color(0xFF7B8796)), textAlign: TextAlign.center),
-              if (lock != null) ...[
-                const SizedBox(height: 14),
-                Row(children: [
-                  Expanded(child: TextButton.icon(onPressed: _editLock, icon: const Icon(Icons.edit, size: 16), label: const Text('编辑', style: TextStyle(fontSize: 13)), style: TextButton.styleFrom(foregroundColor: const Color(0xFF2563EB)))),
-                  Expanded(child: TextButton.icon(onPressed: _deleteLock, icon: const Icon(Icons.delete, size: 16), label: const Text('删除', style: TextStyle(fontSize: 13)), style: TextButton.styleFrom(foregroundColor: const Color(0xFFE14B55)))),
-                ]),
-              ],
-            ])),
-            if (_statusMessage.isNotEmpty) ...[const SizedBox(height: 12), _buildStatusCard()],
-            const SizedBox(height: 12),
-            _buildCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                const Icon(Icons.article, size: 16, color: Color(0xFF7B8796)),
-                const SizedBox(width: 6),
-                const Text('调试日志', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF111827))),
-                const Spacer(),
-                Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: const Color(0xFFF7F9FC), borderRadius: BorderRadius.circular(20), border: Border.all(color: const Color(0xFFE5EDF6))), child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Container(width: 6, height: 6, decoration: BoxDecoration(color: _isUnlocking ? const Color(0xFF2563EB) : const Color(0xFF8793A3), borderRadius: BorderRadius.circular(3))),
-                  const SizedBox(width: 4),
-                  Text(_isUnlocking ? '运行中' : '等待日志', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF7B8796))),
-                ])),
-              ]),
-              const SizedBox(height: 12),
-              Container(
-                height: 160, width: double.infinity, padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: const Color(0xFF0A1728), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFF14243A))),
-                child: SingleChildScrollView(child: Text(_log.isEmpty ? '暂无日志，点击「立即开锁」开始调试' : _log, style: const TextStyle(color: Color(0xFF65D98D), fontSize: 11, fontFamily: 'monospace', height: 1.6))),
-              ),
-              const SizedBox(height: 12),
-              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                TextButton(onPressed: () => setState(() => _log = ''), child: const Text('清空日志', style: TextStyle(fontSize: 13, color: Color(0xFF1F6FFF)))),
-                const SizedBox(width: 40),
-                TextButton(
-                  onPressed: () async {
-                    await svc.Clipboard.setData(svc.ClipboardData(text: _log));
-                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('日志已复制')));
-                  },
-                  child: const Text('复制日志', style: TextStyle(fontSize: 13, color: Color(0xFF00866B))),
-                ),
-              ]),
-            ])),
-            const SizedBox(height: 80),
-          ],
-        ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(children: [
+          _buildMainCard(lock),
+          const SizedBox(height: 12),
+          if (_statusText.isNotEmpty) _buildStatusBar(),
+        ]),
       ),
-      floatingActionButton: FloatingActionButton(onPressed: _addLock, tooltip: '添加门禁', backgroundColor: const Color(0xFF2563EB), foregroundColor: Colors.white, child: const Icon(Icons.add)),
+      bottomNavigationBar: BottomNavigationBar(
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: '首页'),
+          BottomNavigationBarItem(icon: Icon(Icons.code), label: '配置'),
+          BottomNavigationBarItem(icon: Icon(Icons.energy_savings_leaf), label: '帮助'),
+        ],
+        currentIndex: 0,
+        selectedItemColor: const Color(0xFF10B981),
+        unselectedItemColor: const Color(0xFF9CA3AF),
+        showUnselectedLabels: true,
+        type: BottomNavigationBarType.fixed,
+        onTap: _onItemTapped,
+      ),
     );
   }
 
-  Widget _buildCard({required Widget child}) {
+  Widget _buildMainCard(LockConfig? lock) {
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFE6EBF1)), boxShadow: [BoxShadow(color: const Color(0xFF1F2937).withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4))]),
-      child: child,
-    );
-  }
-
-  Widget _buildParamItem(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 70, child: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF7B8796)))),
-        Expanded(child: Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF253041), fontFamily: 'monospace', overflow: TextOverflow.ellipsis))),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('蓝牙门禁', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF111827))),
+        const SizedBox(height: 16),
+        _buildDoorSelector(lock),
+        const SizedBox(height: 16),
+        _buildParamsSection(lock),
+        const SizedBox(height: 24),
+        _buildUnlockButton(),
+        const SizedBox(height: 12),
+        Text(
+          _isUnlocking ? '正在连接和握手，请保持手机靠近门锁' : '靠近门锁后点击按钮即可尝试开锁',
+          style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+          textAlign: TextAlign.center,
+        ),
+        if (_isUnlocking) ...[
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _cancelUnlock,
+              icon: const Icon(Icons.close, size: 18, color: Color(0xFFEF4444)),
+              label: const Text('取消', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFFEF4444))),
+              style: OutlinedButton.styleFrom(
+                backgroundColor: const Color(0xFFFEF2F2),
+                side: const BorderSide(color: Color(0xFFFECACA)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
+              ),
+            ),
+          ),
+        ],
       ]),
     );
   }
 
-  Widget _buildStatusCard() {
-    Color bgColor, borderColor, textColor;
-    switch (_statusTone) {
-      case 'active': bgColor = const Color(0xFFF3F8FF); borderColor = const Color(0xFFC8DDFF); textColor = const Color(0xFF2563EB); break;
-      case 'error': bgColor = const Color(0xFFFFF1F2); borderColor = const Color(0xFFFFD1D6); textColor = const Color(0xFFD23B48); break;
-      default: bgColor = const Color(0xFFECFDF5); borderColor = const Color(0xFFBCEFD4); textColor = const Color(0xFF0C9868); break;
+  Widget _buildDoorSelector(LockConfig? lock) {
+    return GestureDetector(
+      onTap: () => setState(() => _selectorOpen = !_selectorOpen),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(12)),
+        child: Row(children: [
+          Container(width: 36, height: 36, decoration: BoxDecoration(color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.location_on, size: 20, color: Color(0xFF10B981))),
+          const SizedBox(width: 12),
+          Expanded(child: Text(lock?.doorName ?? '请先添加门禁', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: lock == null ? const Color(0xFF9CA3AF) : const Color(0xFF111827), overflow: TextOverflow.ellipsis))),
+          Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: const Color(0xFFDBEAFE), borderRadius: BorderRadius.circular(12)), child: const Text('BLE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF3B82F6)))),
+          const SizedBox(width: 8),
+          Icon(_selectorOpen ? Icons.keyboard_arrow_down : Icons.chevron_right, size: 22, color: const Color(0xFF9CA3AF)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildParamsSection(LockConfig? lock) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(12)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Text('门禁信息', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF))),
+          const Spacer(),
+          GestureDetector(onTap: () => setState(() => _paramsHidden = !_paramsHidden), child: Icon(_paramsHidden ? Icons.visibility_off : Icons.visibility, size: 20, color: const Color(0xFF9CA3AF))),
+        ]),
+        const SizedBox(height: 12),
+        Row(children: [
+          const SizedBox(width: 80, child: Text('门禁 MAC', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))),
+          Expanded(child: Text(_paramsHidden ? _maskedMac : (lock?.mac ?? '—'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF111827), fontFamily: 'monospace'))),
+        ]),
+        const SizedBox(height: 10),
+        Row(children: [
+          const SizedBox(width: 80, child: Text('门禁 Key', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))),
+          Expanded(child: Text(_paramsHidden ? _maskedKey : (lock?.productKey ?? '—'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF111827), fontFamily: 'monospace'))),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _buildUnlockButton() {
+    return Center(
+      child: SizedBox(
+        width: 240, height: 52,
+        child: ElevatedButton(
+          onPressed: _isUnlocking ? null : _unlock,
+          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)), elevation: 0),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            if (_isUnlocking) const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
+            else const Icon(Icons.lock, size: 20),
+            const SizedBox(width: 10),
+            Text(_isUnlocking ? '执行中...' : '立即开锁', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusBar() {
+    Color bgColor, dotColor, textColor;
+    switch (_statusType) {
+      case 'unlocking':
+        bgColor = const Color(0xFFEFF6FF);
+        dotColor = const Color(0xFF3B82F6);
+        textColor = const Color(0xFF2563EB);
+        break;
+      case 'success':
+        bgColor = const Color(0xFFECFDF5);
+        dotColor = const Color(0xFF10B981);
+        textColor = const Color(0xFF059669);
+        break;
+      case 'cancelled':
+        bgColor = const Color(0xFFECFDF5);
+        dotColor = const Color(0xFF10B981);
+        textColor = const Color(0xFF059669);
+        break;
+      case 'error':
+        bgColor = const Color(0xFFFEF2F2);
+        dotColor = const Color(0xFFEF4444);
+        textColor = const Color(0xFFDC2626);
+        break;
+      default:
+        bgColor = const Color(0xFFF3F4F6);
+        dotColor = const Color(0xFF9CA3AF);
+        textColor = const Color(0xFF6B7280);
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(12), border: Border.all(color: borderColor)),
+      decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(12)),
       child: Row(children: [
-        Container(width: 8, height: 8, decoration: BoxDecoration(color: textColor, borderRadius: BorderRadius.circular(4))),
+        Container(width: 8, height: 8, decoration: BoxDecoration(color: dotColor, borderRadius: BorderRadius.circular(4))),
         const SizedBox(width: 10),
-        Expanded(child: Text(_statusMessage, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: textColor))),
+        Text(_statusText, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: textColor)),
       ]),
     );
   }
